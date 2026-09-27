@@ -1,39 +1,62 @@
 import type { ServerMessage } from '@trailer-arena/shared';
 
+import { AudioManager } from '../audio/AudioManager.js';
 import { DebugPanel } from '../debug/DebugPanel.js';
+import { ArcadeFeedbackSystem } from '../effects/ArcadeFeedbackSystem.js';
 import { InputManager } from '../input/InputManager.js';
 import { InputTransmitter } from '../networking/InputTransmitter.js';
 import { NetworkClient } from '../networking/NetworkClient.js';
+import { resolveWebSocketUrl } from '../networking/ConnectionConfig.js';
 import { ChaseCamera } from '../camera/ChaseCamera.js';
 import { Renderer } from '../rendering/Renderer.js';
 import { SceneManager } from '../rendering/SceneManager.js';
 import { World } from '../world/World.js';
 import { GameHud } from '../ui/GameHud.js';
+import { SessionPanel, friendlyServerError } from '../ui/SessionPanel.js';
 import { GameLoop } from './GameLoop.js';
-
-const DEFAULT_WEBSOCKET_URL = 'ws://localhost:3000';
 
 export class Game {
   private readonly renderer: Renderer;
   private readonly sceneManager = new SceneManager();
   private readonly chaseCamera = new ChaseCamera();
   private readonly networkClient = new NetworkClient(
-    import.meta.env.VITE_WS_URL ?? DEFAULT_WEBSOCKET_URL,
+    resolveWebSocketUrl(
+      import.meta.env.VITE_WS_URL,
+      window.location,
+      import.meta.env.DEV,
+    ),
   );
   private readonly inputManager = new InputManager();
+  private readonly audio = new AudioManager();
   private readonly gameHud: GameHud;
+  private readonly sessionPanel: SessionPanel;
   private readonly world = new World(this.sceneManager.scene);
   private readonly debugPanel: DebugPanel;
+  private readonly feedback: ArcadeFeedbackSystem;
   private readonly inputTransmitter: InputTransmitter;
   private readonly gameLoop: GameLoop;
   private snapshotCount = 0;
   private snapshotWindowStartedAt = performance.now();
   private telemetryAccumulator = 0;
+  private renderStatsAccumulator = 0;
+  private renderFrames = 0;
   private localPlayerId: string | null = null;
 
   public constructor(container: HTMLElement) {
     this.renderer = new Renderer(container);
+    this.feedback = new ArcadeFeedbackSystem(
+      this.sceneManager.scene,
+      getRequiredElement('feedback-overlay'),
+      {
+        cameraShake: (strength) => this.chaseCamera.addImpactShake(strength),
+        playCollision: (strength) => this.audio.playCollision(strength),
+        playRam: (strength) => this.audio.playRam(strength),
+      },
+    );
     this.debugPanel = new DebugPanel({
+      disconnectFor: (milliseconds) => {
+        if (import.meta.env.DEV) this.networkClient.debugDisconnectFor(milliseconds);
+      },
       createRoom: (playerName) => {
         if (!this.networkClient.createRoom(playerName)) {
           this.debugPanel.setMessage('Cannot create a room while disconnected.', true);
@@ -131,6 +154,25 @@ export class Game {
           this.debugPanel.setMessage('Cannot start next round.', true);
         }
       },
+      playAudioCue: (cue) => this.audio.playCue(cue),
+      toggleSound: () => this.audio.toggleEnabled(),
+    });
+    this.sessionPanel = new SessionPanel({
+      createRoom: (name) => {
+        if (!this.networkClient.createRoom(name))
+          this.sessionPanel.setMessage('Connect to the server first.');
+      },
+      joinRoom: (name, code) => {
+        if (!this.networkClient.joinRoom(name, code))
+          this.sessionPanel.setMessage('Connect to the server first.');
+      },
+      leaveRoom: () => {
+        this.networkClient.leaveRoom();
+      },
+      connectFresh: () => {
+        this.clearRoomState();
+        this.networkClient.connectFresh();
+      },
     });
     this.inputTransmitter = new InputTransmitter(
       () => this.inputManager.getState(),
@@ -147,21 +189,44 @@ export class Game {
         this.debugPanel.setMessage('Cannot self-right while disconnected.', true);
       }
     });
-    this.gameLoop = new GameLoop((deltaSeconds, elapsedSeconds) => {
-      this.world.updateVisualState(deltaSeconds, this.inputManager.getState());
+    this.gameLoop = new GameLoop((deltaSeconds) => {
+      const input = this.inputManager.getState();
+      this.world.updateVisualState(deltaSeconds, input);
       this.gameHud.update();
+      this.sessionPanel.update();
       const localVehicle = this.world.getLocalVehicleObject();
       const localSnapshot = this.world.getLocalVehicleSnapshot();
       const convoySnapshot = this.world.getConvoySnapshot();
       this.chaseCamera.setTarget(localVehicle);
       this.chaseCamera.update(deltaSeconds, localSnapshot?.forwardSpeed ?? 0);
+      this.world.updateNameplates(this.chaseCamera.camera.position);
+      this.feedback.update(deltaSeconds, localSnapshot, input);
+      this.audio.updateLocalEngine(
+        localSnapshot?.forwardSpeed ?? 0,
+        input.throttle,
+        localSnapshot?.lateralSpeed ?? 0,
+        deltaSeconds,
+        input.brake > 0,
+        localSnapshot !== null,
+      );
+      this.audio.updateRemoteEngines(
+        this.world.getRemoteEngineStates(),
+        [
+          this.chaseCamera.camera.position.x,
+          this.chaseCamera.camera.position.y,
+          this.chaseCamera.camera.position.z,
+        ],
+        deltaSeconds,
+      );
       this.updateTelemetry(deltaSeconds, localSnapshot, convoySnapshot);
-      this.sceneManager.update(elapsedSeconds);
       this.renderer.render(this.sceneManager.scene, this.chaseCamera.camera);
+      this.updateRenderStats(deltaSeconds);
     });
 
     this.bindNetworkEvents();
     window.addEventListener('resize', this.handleResize);
+    window.addEventListener('pointerdown', this.handleFirstInteraction);
+    window.addEventListener('keydown', this.handleFirstInteraction);
   }
 
   public start(): void {
@@ -173,26 +238,43 @@ export class Game {
 
   public dispose(): void {
     window.removeEventListener('resize', this.handleResize);
+    window.removeEventListener('pointerdown', this.handleFirstInteraction);
+    window.removeEventListener('keydown', this.handleFirstInteraction);
     this.gameLoop.stop();
     this.networkClient.disconnect();
     this.inputTransmitter.stop();
     this.inputManager.stop();
     this.world.dispose();
+    this.feedback.dispose();
+    this.audio.dispose();
     this.renderer.dispose();
   }
 
   private bindNetworkEvents(): void {
+    this.networkClient.onRoomActionChange((action) => {
+      this.sessionPanel.setRoomAction(action);
+      this.gameHud.setConnection(this.networkClient.isConnected && action === 'NONE');
+      if (action === 'LEAVING') {
+        this.setGameplayInputEnabled(false);
+        this.world.prepareForAuthoritativeDiscontinuity();
+      }
+    });
     this.networkClient.onStateChange((state) => {
       this.debugPanel.setConnection(state);
-      if (state === 'DISCONNECTED') {
-        this.world.clear();
-        this.localPlayerId = null;
-        this.gameHud.setLocalContext(null, null);
+      this.sessionPanel.setConnection(state);
+      this.gameHud.setConnection(
+        state === 'CONNECTED' && this.networkClient.roomAction === 'NONE',
+      );
+      if (state === 'RECONNECTING' || state === 'CONNECTING') {
+        this.world.prepareForAuthoritativeDiscontinuity();
         this.setGameplayInputEnabled(false);
+      } else if (state === 'DISCONNECTED' || state === 'FAILED') {
+        this.clearRoomState();
       }
     });
     this.networkClient.onProtocolError((message) => {
       this.debugPanel.setMessage(message, true);
+      this.sessionPanel.setMessage(message);
     });
     this.networkClient.onMessage((message) => {
       this.handleServerMessage(message);
@@ -201,15 +283,45 @@ export class Game {
 
   private handleServerMessage(message: ServerMessage): void {
     switch (message.type) {
+      case 'room_left':
+        this.clearRoomState();
+        break;
+      case 'session_resumed': {
+        const { playerId, roomId, state } = message;
+        this.clearRoomState();
+        if (playerId !== null && roomId !== null && state !== null) {
+          this.localPlayerId = playerId;
+          this.debugPanel.setPlayerId(playerId);
+          this.debugPanel.setRoomId(roomId);
+          this.sessionPanel.setRoom(roomId);
+          this.world.resyncFromSnapshot(state, playerId);
+          this.gameHud.setLocalContext(playerId, roomId);
+          this.gameHud.applyFullSnapshot(state.gameState, state.serverTick);
+          const local = state.vehicles.find((vehicle) => vehicle.playerId === playerId)!;
+          this.inputTransmitter.resetSequence(local.lastProcessedInputSequence);
+          this.setGameplayInputEnabled(
+            state.gameState.phase === 'PLAYING' &&
+              (state.gameState.players.find((player) => player.playerId === playerId)
+                ?.participant ??
+                false),
+          );
+          this.debugPanel.setMessage('Session restored from full authoritative state.');
+        }
+        this.sessionPanel.showReconnected();
+        break;
+      }
       case 'connected':
         this.debugPanel.setMessage('Server handshake complete.');
         break;
       case 'room_joined':
+        this.clearRoomState();
         this.localPlayerId = message.playerId;
         this.debugPanel.setPlayerId(message.playerId);
         this.debugPanel.setRoomId(message.roomId);
         this.world.setLocalPlayerId(message.playerId);
         this.gameHud.setLocalContext(message.playerId, message.roomId);
+        this.sessionPanel.setRoom(message.roomId);
+        this.inputTransmitter.resetSequence(-1);
         this.snapshotCount = 0;
         this.snapshotWindowStartedAt = performance.now();
         this.debugPanel.clearSnapshotRate();
@@ -233,10 +345,12 @@ export class Game {
         this.debugPanel.setServerTick(message.tick);
         break;
       case 'world_snapshot':
+        if (!this.networkClient.isConnected || this.localPlayerId === null) break;
         this.world.applySnapshot(message);
         this.gameHud.applySnapshot(message.gameState, message.serverTick);
         this.setGameplayInputEnabled(
-          message.gameState.phase === 'PLAYING' &&
+          this.networkClient.roomAction === 'NONE' &&
+            message.gameState.phase === 'PLAYING' &&
             (message.gameState.players.find(
               (player) => player.playerId === this.localPlayerId,
             )?.participant ??
@@ -244,8 +358,13 @@ export class Game {
         );
         this.recordSnapshot();
         break;
+      case 'gameplay_event':
+        if (this.networkClient.isConnected && this.localPlayerId !== null)
+          this.feedback.handleRamEvent(message.event, this.localPlayerId);
+        break;
       case 'error':
-        this.debugPanel.setMessage(`${message.code}: ${message.message}`, true);
+        this.debugPanel.setMessage(friendlyServerError(message.code), true);
+        this.sessionPanel.setError(message.code);
         break;
     }
   }
@@ -256,11 +375,34 @@ export class Game {
     this.debugPanel.setGameplayControlsEnabled(enabled);
   }
 
+  private clearRoomState(): void {
+    this.world.clear();
+    this.feedback.clear();
+    this.localPlayerId = null;
+    this.gameHud.clear();
+    this.sessionPanel.setRoom(null);
+    this.inputTransmitter.resetSequence(-1);
+    this.debugPanel.clearRoomTelemetry();
+    this.debugPanel.setPredictionTelemetry(
+      this.world.getPredictionMetrics(),
+      this.world.getNetworkMetrics(),
+    );
+    this.debugPanel.setPlayerId(null);
+    this.debugPanel.setRoomId(null);
+    this.snapshotCount = 0;
+    this.snapshotWindowStartedAt = performance.now();
+    this.setGameplayInputEnabled(false);
+  }
+
   private readonly handleResize = (): void => {
     const width = window.innerWidth;
     const height = window.innerHeight;
     this.renderer.resize(width, height);
     this.chaseCamera.resize(width, height);
+  };
+
+  private readonly handleFirstInteraction = (): void => {
+    void this.audio.unlock();
   };
 
   private recordSnapshot(): void {
@@ -272,6 +414,20 @@ export class Game {
       this.snapshotCount = 0;
       this.snapshotWindowStartedAt = now;
     }
+  }
+
+  private updateRenderStats(deltaSeconds: number): void {
+    this.renderStatsAccumulator += deltaSeconds;
+    this.renderFrames += 1;
+    if (this.renderStatsAccumulator < 0.5) return;
+    const stats = this.renderer.stats;
+    this.debugPanel.setRenderStats(
+      this.renderFrames / this.renderStatsAccumulator,
+      stats.drawCalls,
+      stats.triangles,
+    );
+    this.renderStatsAccumulator = 0;
+    this.renderFrames = 0;
   }
 
   private updateTelemetry(
@@ -313,6 +469,12 @@ export class Game {
       this.world.getNetworkMetrics(),
     );
   }
+}
+
+function getRequiredElement(id: string): HTMLElement {
+  const element = document.getElementById(id);
+  if (element === null) throw new Error(`Required element #${id} is missing.`);
+  return element;
 }
 
 function shortId(id: string): string {

@@ -82,6 +82,15 @@ export class TrailerView {
       roughness: 0.95,
       flatShading: true,
     });
+    const plankMaterials = [0xe9cf98, 0xddbd7e, 0xf0d8a6].map(
+      (color) =>
+        new THREE.MeshStandardMaterial({ color, roughness: 0.92, flatShading: true }),
+    );
+    const warningMaterial = new THREE.MeshStandardMaterial({
+      color: 0xf2c55f,
+      roughness: 0.78,
+      flatShading: true,
+    });
     addBox(
       this.object,
       [
@@ -92,6 +101,19 @@ export class TrailerView {
       [0, TRAILER_DIMENSIONS.deckHeight, 0],
       deckMaterial,
     );
+    const plankWidth = (TRAILER_DIMENSIONS.deckWidth - 0.3) / 9;
+    for (let index = 0; index < 9; index += 1) {
+      addBox(
+        this.object,
+        [plankWidth - 0.035, 0.028, TRAILER_DIMENSIONS.deckLength - 0.22],
+        [
+          -TRAILER_DIMENSIONS.deckWidth / 2 + 0.15 + plankWidth * (index + 0.5),
+          TRAILER_DIMENSIONS.deckHeight + TRAILER_DIMENSIONS.deckThickness / 2 + 0.015,
+          0,
+        ],
+        plankMaterials[index % plankMaterials.length]!,
+      );
+    }
     const ramp = addBox(
       this.object,
       [
@@ -103,6 +125,15 @@ export class TrailerView {
       deckMaterial,
     );
     ramp.rotation.x = -TRAILER_RAMP_ANGLE;
+    for (const x of [-2.5, 0, 2.5]) {
+      const stripe = new THREE.Mesh(
+        new THREE.BoxGeometry(0.18, 0.025, TRAILER_DIMENSIONS.rampLength - 0.28),
+        warningMaterial,
+      );
+      stripe.position.set(x, TRAILER_DIMENSIONS.rampThickness / 2 + 0.018, 0);
+      stripe.castShadow = false;
+      ramp.add(stripe);
+    }
 
     const lipY =
       TRAILER_DIMENSIONS.deckHeight +
@@ -138,6 +169,14 @@ export class TrailerView {
       ],
       frameMaterial,
     );
+    for (const z of [-6.2, -2.2, 1.8, 5.8]) {
+      addBox(
+        this.object,
+        [TRAILER_DIMENSIONS.deckWidth - 0.45, 0.16, 0.24],
+        [0, TRAILER_DIMENSIONS.deckHeight - 0.34, z],
+        frameMaterial,
+      );
+    }
     addBox(this.object, [1.1, 0.5, 1.6], [0, 0.68, 8.8], frameMaterial);
     addBox(
       this.object,
@@ -175,6 +214,19 @@ export class TrailerView {
         wheel.castShadow = true;
         this.object.add(wheel);
       }
+    }
+    const tailLightMaterial = new THREE.MeshStandardMaterial({
+      color: 0xe85d62,
+      emissive: 0x4e1415,
+      emissiveIntensity: 0.8,
+    });
+    for (const x of [-2.75, 2.75]) {
+      addBox(
+        this.object,
+        [0.42, 0.24, 0.12],
+        [x, 0.72, -TRAILER_DIMENSIONS.deckLength / 2 - 0.05],
+        tailLightMaterial,
+      );
     }
   }
 }

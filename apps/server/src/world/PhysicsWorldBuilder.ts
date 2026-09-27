@@ -3,10 +3,12 @@ import { STATIC_WORLD_BOXES } from '@trailer-arena/shared';
 
 import { WORLD_COLLISION_GROUPS } from '../physics/CollisionGroups.js';
 import { SurfaceRegistry } from '../physics/SurfaceRegistry.js';
+import { addInfieldColliders } from './InfieldColliders.js';
 
 export interface RoomPhysicsContext {
   readonly world: RAPIER.World;
   readonly surfaces: SurfaceRegistry;
+  readonly infieldColliders: ReadonlyMap<string, RAPIER.Collider>;
 }
 
 export function createRoomPhysicsContext(): RoomPhysicsContext {
@@ -31,7 +33,8 @@ export function createRoomPhysicsContext(): RoomPhysicsContext {
     surfaces.registerGround(world.createCollider(collider));
   }
 
-  return { world, surfaces };
+  const infieldColliders = addInfieldColliders(world, surfaces);
+  return { world, surfaces, infieldColliders };
 }
 
 export function createRoomPhysicsWorld(): RAPIER.World {

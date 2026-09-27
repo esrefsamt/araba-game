@@ -4,6 +4,10 @@ import {
   MAX_PLAYER_NAME_LENGTH,
   MIN_PLAYER_NAME_LENGTH,
   createServerCodec,
+  SESSION_GRACE_MS,
+  HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_TIMEOUT_MS,
+  isSessionToken,
 } from '@trailer-arena/shared';
 import type {
   ClientMessage,
@@ -17,6 +21,7 @@ import type { RawData } from 'ws';
 import { ServerPlayer } from '../players/ServerPlayer.js';
 import type { GameRoom } from '../rooms/GameRoom.js';
 import type { RoomManager } from '../rooms/RoomManager.js';
+import { SessionRegistry, type PlayerSession } from './SessionRegistry.js';
 
 interface ClientConnection {
   readonly clientId: string;
@@ -27,6 +32,18 @@ interface ClientConnection {
   inputMessagesInWindow: number;
   lastResetAt: number;
   lastSelfRightAt: number;
+  session: PlayerSession;
+  lastReceivedAt: number;
+  lastHeartbeatAt: number;
+  actionWindowStartedAt: number;
+  actionsInWindow: number;
+}
+
+export interface ConnectionManagerOptions {
+  graceMs?: number;
+  heartbeatIntervalMs?: number;
+  heartbeatTimeoutMs?: number;
+  now?: () => number;
 }
 
 const MAX_INPUT_MESSAGES_PER_SECOND = 90;
@@ -38,12 +55,64 @@ export class ConnectionManager {
   private readonly connectionsByPlayerId = new Map<string, ClientConnection>();
   private readonly codec: ProtocolCodec<ClientMessage, ServerMessage> =
     createServerCodec();
+  private readonly sessions: SessionRegistry;
+  private readonly graceMs: number;
+  private readonly heartbeatIntervalMs: number;
+  private readonly heartbeatTimeoutMs: number;
+  private readonly now: () => number;
+  private nextMaintenanceAt = 0;
+  private shuttingDown = false;
 
-  public constructor(private readonly roomManager: RoomManager) {}
+  public constructor(
+    private readonly roomManager: RoomManager,
+    options: ConnectionManagerOptions = {},
+  ) {
+    this.graceMs = options.graceMs ?? SESSION_GRACE_MS;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
+    this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS;
+    this.now = options.now ?? Date.now;
+    this.sessions = new SessionRegistry(this.graceMs);
+  }
+
+  public get sessionCount(): number {
+    return this.sessions.size;
+  }
+
+  public maintainConnections(): void {
+    const now = this.now();
+    if (now < this.nextMaintenanceAt || this.shuttingDown) return;
+    this.nextMaintenanceAt = now + 1_000;
+    for (const connection of this.connections.values()) {
+      if (now - connection.lastReceivedAt >= this.heartbeatTimeoutMs) {
+        this.handleDisconnect(connection);
+        connection.socket.terminate();
+      } else if (
+        now - connection.lastHeartbeatAt >= this.heartbeatIntervalMs &&
+        connection.socket.readyState === WebSocket.OPEN
+      ) {
+        connection.lastHeartbeatAt = now;
+        connection.socket.ping();
+      }
+    }
+    this.expireSessions(now);
+  }
+
+  public shutdown(): void {
+    this.shuttingDown = true;
+    this.connections.clear();
+    this.connectionsByPlayerId.clear();
+    this.sessions.clear();
+  }
 
   public handleConnection(socket: WebSocket): void {
+    if (this.shuttingDown) {
+      socket.close(1001, 'Server shutting down');
+      return;
+    }
+    const clientId = `client_${randomUUID()}`;
+    const now = this.now();
     const connection: ClientConnection = {
-      clientId: `client_${randomUUID()}`,
+      clientId,
       socket,
       player: null,
       roomId: null,
@@ -51,6 +120,11 @@ export class ConnectionManager {
       inputMessagesInWindow: 0,
       lastResetAt: 0,
       lastSelfRightAt: 0,
+      session: this.sessions.create(clientId),
+      lastReceivedAt: now,
+      lastHeartbeatAt: now,
+      actionWindowStartedAt: now,
+      actionsInWindow: 0,
     };
     this.connections.set(socket, connection);
 
@@ -60,11 +134,19 @@ export class ConnectionManager {
     socket.on('close', () => {
       this.handleDisconnect(connection);
     });
+    socket.on('pong', () => {
+      connection.lastReceivedAt = this.now();
+    });
     socket.on('error', (error) => {
       console.warn(`[network] ${connection.clientId} socket error:`, error.message);
     });
 
-    this.send(connection, { type: 'connected', clientId: connection.clientId });
+    this.send(connection, {
+      type: 'connected',
+      clientId: connection.clientId,
+      sessionToken: connection.session.token,
+      reconnectWindowMs: this.graceMs,
+    });
     console.info(`[network] connected ${connection.clientId}`);
   }
 
@@ -97,6 +179,10 @@ export class ConnectionManager {
     data: RawData,
     isBinary: boolean,
   ): void {
+    // Messages already queued on a detached socket cannot control its resumed player.
+    if (this.connections.get(connection.socket) !== connection || this.shuttingDown)
+      return;
+    connection.lastReceivedAt = this.now();
     if (isBinary) {
       this.sendError(
         connection,
@@ -128,7 +214,20 @@ export class ConnectionManager {
   }
 
   private handleMessage(connection: ClientConnection, message: ClientMessage): void {
+    if (
+      (message.type === 'join_room' ||
+        message.type === 'reconnect_session' ||
+        message.type === 'leave_room') &&
+      !this.allowSessionAction(connection)
+    )
+      return;
     switch (message.type) {
+      case 'reconnect_session':
+        this.handleReconnect(connection, message.sessionToken);
+        break;
+      case 'leave_room':
+        this.handleLeaveRoom(connection);
+        break;
       case 'ping':
         this.send(connection, { type: 'pong', timestamp: message.timestamp });
         break;
@@ -235,6 +334,8 @@ export class ConnectionManager {
 
     connection.player = player;
     connection.roomId = room.id;
+    connection.session.player = player;
+    connection.session.roomId = room.id;
     this.connectionsByPlayerId.set(player.id, connection);
 
     this.send(connection, {
@@ -262,7 +363,117 @@ export class ConnectionManager {
       },
       player.id,
     );
+    this.broadcastToRoom(room, room.createWorldSnapshot());
     console.info(`[room ${room.id}] joined ${player.name} (${player.id})`);
+  }
+
+  private handleReconnect(connection: ClientConnection, token: string): void {
+    const now = this.now();
+    this.expireSessions(now);
+    if (connection.player !== null || !isSessionToken(token)) {
+      this.sendError(
+        connection,
+        'SESSION_ACTIVE',
+        'This connection already owns a session.',
+      );
+      return;
+    }
+    const session = this.sessions.get(token);
+    if (session === undefined) {
+      this.sendError(
+        connection,
+        'SESSION_EXPIRED',
+        'Session expired or server restarted.',
+      );
+      return;
+    }
+    const active = Array.from(this.connections.values()).find(
+      (other) => other.clientId === session.activeConnectionId,
+    );
+    if (
+      active !== undefined &&
+      (active.socket.readyState !== WebSocket.OPEN ||
+        now - active.lastReceivedAt >= this.heartbeatTimeoutMs)
+    ) {
+      this.handleDisconnect(active);
+      active.socket.terminate();
+    }
+    if (session.activeConnectionId !== null) {
+      this.sendError(connection, 'SESSION_ACTIVE', 'This session is already connected.');
+      return;
+    }
+    const room =
+      session.roomId === null ? undefined : this.roomManager.getRoom(session.roomId);
+    if (
+      session.player !== null &&
+      (room === undefined || !room.hasPlayer(session.player.id))
+    ) {
+      this.sessions.remove(session);
+      this.sendError(connection, 'SESSION_EXPIRED', 'Room no longer exists.');
+      return;
+    }
+    if (!this.sessions.claim(session, connection.clientId, now)) {
+      this.sendError(connection, 'SESSION_EXPIRED', 'Reconnect window expired.');
+      return;
+    }
+    this.sessions.remove(connection.session); // Discard this transport's provisional token.
+    connection.session = session;
+    connection.player = session.player;
+    connection.roomId = session.roomId;
+    if (session.player !== null && room !== undefined) {
+      this.connectionsByPlayerId.set(session.player.id, connection);
+      room.setPlayerConnected(session.player.id, true);
+    }
+    this.send(connection, {
+      type: 'session_resumed',
+      sessionToken: session.token,
+      playerId: session.player?.id ?? null,
+      roomId: session.roomId,
+      state: room?.createWorldSnapshot() ?? null,
+    });
+  }
+
+  private handleLeaveRoom(connection: ClientConnection): void {
+    const { player, roomId } = connection;
+    this.sessions.remove(connection.session);
+    if (player !== null && roomId !== null) {
+      this.connectionsByPlayerId.delete(player.id);
+      const room = this.roomManager.getRoom(roomId);
+      this.roomManager.leaveRoom(roomId, player.id);
+      if (room !== undefined)
+        this.broadcastToRoom(room, { type: 'player_left', playerId: player.id });
+    }
+    connection.player = null;
+    connection.roomId = null;
+    connection.session = this.sessions.create(connection.clientId);
+    this.send(connection, { type: 'room_left', sessionToken: connection.session.token });
+  }
+
+  private allowSessionAction(connection: ClientConnection): boolean {
+    const now = this.now();
+    if (now - connection.actionWindowStartedAt >= 10_000) {
+      connection.actionWindowStartedAt = now;
+      connection.actionsInWindow = 0;
+    }
+    connection.actionsInWindow += 1;
+    if (connection.actionsInWindow <= 6) return true;
+    this.sendError(
+      connection,
+      'RATE_LIMITED',
+      'Too many room/session requests. Please wait.',
+    );
+    return false;
+  }
+
+  private expireSessions(now: number): void {
+    for (const session of this.sessions.expire(now)) {
+      const { player, roomId } = session;
+      if (player === null || roomId === null) continue;
+      const room = this.roomManager.getRoom(roomId);
+      this.roomManager.leaveRoom(roomId, player.id);
+      if (room !== undefined)
+        this.broadcastToRoom(room, { type: 'player_left', playerId: player.id });
+    }
   }
 
   private handlePlayerInput(
@@ -423,12 +634,10 @@ export class ConnectionManager {
     if (player !== null && roomId !== null) {
       this.connectionsByPlayerId.delete(player.id);
       const room = this.roomManager.getRoom(roomId);
-      this.roomManager.leaveRoom(roomId, player.id);
-      if (room !== undefined) {
-        this.broadcastToRoom(room, { type: 'player_left', playerId: player.id });
-      }
-      console.info(`[room ${roomId}] left ${player.name} (${player.id})`);
+      room?.setPlayerConnected(player.id, false);
+      console.info(`[room ${roomId}] grace started for ${player.id}`);
     }
+    this.sessions.disconnect(connection.session, connection.clientId, this.now());
     console.info(`[network] disconnected ${connection.clientId}`);
   }
 
@@ -446,7 +655,12 @@ export class ConnectionManager {
 
   private sendEncoded(connection: ClientConnection, encoded: string): void {
     if (connection.socket.readyState === WebSocket.OPEN) {
-      connection.socket.send(encoded);
+      connection.socket.send(encoded, (error) => {
+        if (error) {
+          this.handleDisconnect(connection);
+          connection.socket.terminate();
+        }
+      });
     }
   }
 }

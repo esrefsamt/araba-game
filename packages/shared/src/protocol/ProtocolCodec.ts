@@ -1,4 +1,5 @@
 import type { ClientMessage } from './ClientMessages.js';
+import { isSessionToken } from '../constants/SessionConstants.js';
 import type { ServerErrorCode } from './MessageTypes.js';
 import type { ServerMessage } from './ServerMessages.js';
 import type { ConvoyStateSnapshot, RigidBodyStateSnapshot } from '../types/Convoy.js';
@@ -32,6 +33,9 @@ const SERVER_ERROR_CODES = new Set<ServerErrorCode>([
   'UNAUTHORIZED_ACTION',
   'INVALID_GAME_STATE',
   'INTERNAL_ERROR',
+  'SESSION_EXPIRED',
+  'SESSION_ACTIVE',
+  'RATE_LIMITED',
 ]);
 
 class JsonProtocolCodec<Inbound, Outbound> implements ProtocolCodec<Inbound, Outbound> {
@@ -60,6 +64,15 @@ function decodeClientMessage(value: unknown): DecodeResult<ClientMessage> {
   }
 
   switch (value.type) {
+    case 'reconnect_session':
+      return isSessionToken(value.sessionToken)
+        ? {
+            ok: true,
+            value: { type: 'reconnect_session', sessionToken: value.sessionToken },
+          }
+        : { ok: false, error: 'Invalid session token format.' };
+    case 'leave_room':
+      return { ok: true, value: { type: 'leave_room' } };
     case 'join_room': {
       if (typeof value.playerName !== 'string') {
         return { ok: false, error: 'join_room requires a playerName string.' };
@@ -143,9 +156,69 @@ function decodeServerMessage(value: unknown): DecodeResult<ServerMessage> {
 
   switch (value.type) {
     case 'connected':
-      return typeof value.clientId === 'string'
-        ? { ok: true, value: { type: 'connected', clientId: value.clientId } }
+      return typeof value.clientId === 'string' &&
+        isSessionToken(value.sessionToken) &&
+        isNonNegativeInteger(value.reconnectWindowMs) &&
+        value.reconnectWindowMs > 0
+        ? {
+            ok: true,
+            value: {
+              type: 'connected',
+              clientId: value.clientId,
+              sessionToken: value.sessionToken,
+              reconnectWindowMs: value.reconnectWindowMs,
+            },
+          }
         : { ok: false, error: 'connected requires clientId.' };
+    case 'room_left':
+      return isSessionToken(value.sessionToken)
+        ? { ok: true, value: { type: 'room_left', sessionToken: value.sessionToken } }
+        : { ok: false, error: 'room_left requires a valid session token.' };
+    case 'session_resumed': {
+      if (!isSessionToken(value.sessionToken))
+        return { ok: false, error: 'session_resumed requires a valid session token.' };
+      if (value.playerId === null && value.roomId === null && value.state === null)
+        return {
+          ok: true,
+          value: {
+            type: 'session_resumed',
+            sessionToken: value.sessionToken,
+            playerId: null,
+            roomId: null,
+            state: null,
+          },
+        };
+      if (
+        typeof value.playerId !== 'string' ||
+        typeof value.roomId !== 'string' ||
+        !isRecord(value.state) ||
+        value.state.type !== 'world_snapshot'
+      )
+        return {
+          ok: false,
+          error: 'session_resumed requires a full authoritative snapshot.',
+        };
+      const state = decodeServerMessage(value.state);
+      if (
+        !state.ok ||
+        state.value.type !== 'world_snapshot' ||
+        !state.value.vehicles.some((vehicle) => vehicle.playerId === value.playerId) ||
+        !state.value.gameState.players.some(
+          (player) => player.playerId === value.playerId,
+        )
+      )
+        return { ok: false, error: 'session_resumed has inconsistent player identity.' };
+      return {
+        ok: true,
+        value: {
+          type: 'session_resumed',
+          sessionToken: value.sessionToken,
+          roomId: value.roomId,
+          playerId: value.playerId,
+          state: state.value,
+        },
+      };
+    }
     case 'room_joined':
       return typeof value.roomId === 'string' && typeof value.playerId === 'string'
         ? {
@@ -216,6 +289,37 @@ function decodeServerMessage(value: unknown): DecodeResult<ServerMessage> {
           vehicles,
           convoy,
           gameState,
+        },
+      };
+    }
+    case 'gameplay_event': {
+      if (!isRecord(value.event) || value.event.eventType !== 'ram_hit') {
+        return { ok: false, error: 'gameplay_event requires a supported event.' };
+      }
+      const position = decodeVector3(value.event.position);
+      if (
+        typeof value.event.eventId !== 'string' ||
+        typeof value.event.attackerPlayerId !== 'string' ||
+        typeof value.event.targetPlayerId !== 'string' ||
+        !isFiniteNumber(value.event.strength) ||
+        value.event.strength < 0 ||
+        value.event.strength > 1 ||
+        position === null
+      ) {
+        return { ok: false, error: 'gameplay_event contains invalid RAM data.' };
+      }
+      return {
+        ok: true,
+        value: {
+          type: 'gameplay_event',
+          event: {
+            eventType: 'ram_hit',
+            eventId: value.event.eventId,
+            attackerPlayerId: value.event.attackerPlayerId,
+            targetPlayerId: value.event.targetPlayerId,
+            strength: value.event.strength,
+            position,
+          },
         },
       };
     }
@@ -388,7 +492,10 @@ function decodeGamePlayerState(value: unknown): GamePlayerStateSnapshot | null {
     !isNonNegativeInteger(value.currentStreakTicks) ||
     !isNonNegativeInteger(value.bestStreakTicks) ||
     !isNonNegativeInteger(value.roundPoints) ||
-    !isNonNegativeInteger(value.sessionPoints)
+    !isNonNegativeInteger(value.sessionPoints) ||
+    (value.connectionState !== undefined &&
+      value.connectionState !== 'CONNECTED' &&
+      value.connectionState !== 'DISCONNECTED_GRACE')
   ) {
     return null;
   }
@@ -403,6 +510,9 @@ function decodeGamePlayerState(value: unknown): GamePlayerStateSnapshot | null {
     bestStreakTicks: value.bestStreakTicks,
     roundPoints: value.roundPoints,
     sessionPoints: value.sessionPoints,
+    ...(value.connectionState === undefined
+      ? {}
+      : { connectionState: value.connectionState }),
   };
 }
 

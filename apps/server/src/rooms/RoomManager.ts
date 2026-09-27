@@ -23,6 +23,12 @@ export class RoomManager {
     return this.rooms.size;
   }
 
+  public get playerCount(): number {
+    let count = 0;
+    for (const room of this.rooms.values()) count += room.playerCount;
+    return count;
+  }
+
   public createRoom(): GameRoom {
     for (let attempt = 0; attempt < MAX_ID_GENERATION_ATTEMPTS; attempt += 1) {
       const roomId = this.roomIdGenerator();

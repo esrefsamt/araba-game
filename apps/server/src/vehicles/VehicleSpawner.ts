@@ -19,8 +19,9 @@ export class VehicleSpawner {
 
   public constructor(private readonly world: RAPIER.World) {}
 
-  public spawn(): SpawnedVehicleBody {
+  public spawn(preferredSpawn?: VehicleSpawnPoint): SpawnedVehicleBody {
     const spawnPoint =
+      preferredSpawn ??
       VEHICLE_SPAWN_POINTS[this.nextSpawnIndex % VEHICLE_SPAWN_POINTS.length];
     if (spawnPoint === undefined) {
       throw new Error('At least one vehicle spawn point is required.');

@@ -1,6 +1,7 @@
 import type { VehicleStateSnapshot, WorldSnapshotMessage } from '@trailer-arena/shared';
 import type * as THREE from 'three';
 
+import type { RemoteEngineState } from '../audio/AudioManager.js';
 import { VehicleView } from './VehicleView.js';
 import type { VehicleTransformWriteDebug } from './VehicleView.js';
 
@@ -21,12 +22,25 @@ export class VehicleManager {
         view = new VehicleView(vehicleState.playerId, this.scene);
         this.vehicles.set(vehicleState.playerId, view);
       }
+      const player = snapshot.gameState.players.find(
+        (candidate) => candidate.playerId === vehicleState.playerId,
+      );
+      view.setPlayerIdentity(
+        player?.playerName ?? 'DRIVER',
+        vehicleState.playerId === this.localPlayerId,
+      );
       view.addSnapshot(snapshot.serverTick, vehicleState);
     }
   }
 
   public beginRenderFrame(): void {
     for (const vehicle of this.vehicles.values()) vehicle.beginRenderFrame();
+  }
+
+  public setLocalWheelSteering(steering: number): void {
+    for (const [playerId, vehicle] of this.vehicles) {
+      vehicle.setWheelSteeringInput(playerId === this.localPlayerId ? steering : null);
+    }
   }
 
   public update(renderTick: number, deltaSeconds: number): void {
@@ -81,6 +95,25 @@ export class VehicleManager {
       }
     }
     return maximum;
+  }
+
+  public updateNameplates(cameraPosition: THREE.Vector3): void {
+    for (const vehicle of this.vehicles.values()) vehicle.updateNameplate(cameraPosition);
+  }
+
+  public getRemoteEngineStates(): RemoteEngineState[] {
+    const states: RemoteEngineState[] = [];
+    for (const [playerId, vehicle] of this.vehicles) {
+      if (playerId === this.localPlayerId) continue;
+      const snapshot = vehicle.getLatestSnapshot();
+      if (snapshot === null) continue;
+      states.push({
+        playerId,
+        position: snapshot.position,
+        speed: snapshot.forwardSpeed,
+      });
+    }
+    return states;
   }
 
   public removeVehicle(playerId: string): void {

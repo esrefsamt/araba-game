@@ -336,19 +336,20 @@ describe('round results, late join and protocol authority', () => {
     expect(getPlayer(mode, 'p1').sessionPoints).toBe(20);
   });
 
-  it('marks a player joining during PLAYING as waiting', () => {
+  it('immediately activates a player joining during PLAYING', () => {
     const mode = createMode();
     startPlaying(mode);
     mode.addPlayer('late', 'Late Player');
-    expect(getPlayer(mode, 'late').participant).toBe(false);
-    expect(mode.canPlayerControl('late')).toBe(false);
+    expect(getPlayer(mode, 'late').participant).toBe(true);
+    expect(mode.canPlayerControl('late')).toBe(true);
   });
 
   it('promotes a late joiner to participant on next round', () => {
     const mode = createMode();
     const tick = startPlaying(mode);
-    mode.addPlayer('late', 'Late Player');
     mode.update(tick + 5, new Set());
+    mode.addPlayer('late', 'Late Player');
+    expect(getPlayer(mode, 'late').participant).toBe(false);
     mode.nextRound('p1', tick + 6);
     expect(getPlayer(mode, 'late').participant).toBe(true);
   });

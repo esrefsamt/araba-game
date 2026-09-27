@@ -13,6 +13,30 @@ const NEUTRAL_INPUT = {
 } as const;
 
 describe('local and remote rendering authority', () => {
+  it.each([true, false])(
+    'routes local steering only to local wheels with prediction enabled=%s',
+    (predictionEnabled) => {
+      const world = new World(new THREE.Scene());
+      world.setLocalPlayerId('local');
+      world.applySnapshot(worldSnapshot(true));
+      world.setPredictionEnabled(predictionEnabled);
+      for (let frame = 0; frame < 60; frame += 1)
+        world.updateVisualState(1 / 60, { ...NEUTRAL_INPUT, steering: -1 });
+      const local = world.getLocalVehicleObject()!;
+      const remote = local.parent!.getObjectByName('vehicle-remote')!;
+      expect(local.getObjectByName('wheel-steer-front-right')!.rotation.y).toBeLessThan(
+        -0.3,
+      );
+      expect(remote.getObjectByName('wheel-steer-front-right')!.rotation.y).toBe(0);
+      expect(world.getPredictionMetrics().renderWritesThisFrame).toBe(1);
+      expect(world.getPredictionMetrics().renderWriterConflicts).toBe(0);
+      expect(world.getPredictionMetrics().renderWriter).toBe(
+        predictionEnabled ? 'PREDICTION' : 'INTERPOLATION',
+      );
+      world.dispose();
+    },
+  );
+
   it('applies prediction only to the local vehicle while remotes stay snapshot-driven', () => {
     const scene = new THREE.Scene();
     const manager = new VehicleManager(scene);

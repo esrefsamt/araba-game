@@ -3,6 +3,7 @@ import type { PredictionMetrics } from '../prediction/AuthoritativePredictionPro
 import type { WorldNetworkMetrics } from '../world/World.js';
 
 export interface DebugPanelActions {
+  disconnectFor(milliseconds: number): void;
   createRoom(playerName: string): void;
   joinRoom(playerName: string, roomId: string): void;
   resetVehicle(): void;
@@ -17,6 +18,7 @@ export interface DebugPanelActions {
 }
 
 export class DebugPanel {
+  private readonly root = getElement('debug-panel');
   private readonly connectionElement = getElement('connection-status');
   private readonly playerIdElement = getElement('player-id');
   private readonly roomIdElement = getElement('room-id');
@@ -47,6 +49,7 @@ export class DebugPanel {
   private readonly predictionVelocityElement = getElement('prediction-velocity');
   private readonly snapshotBufferElement = getElement('snapshot-buffer');
   private readonly networkJitterElement = getElement('network-jitter');
+  private readonly renderStatsElement = getElement('render-stats');
   private readonly messageElement = getElement('network-message');
   private readonly playerNameInput = getInput('player-name');
   private readonly roomCodeInput = getInput('room-code');
@@ -66,6 +69,11 @@ export class DebugPanel {
   private predictionEnabled = true;
 
   public constructor(actions: DebugPanelActions) {
+    const disconnectFive = getButton('disconnect-five');
+    const disconnectExpire = getButton('disconnect-expire');
+    disconnectFive.hidden = disconnectExpire.hidden = !import.meta.env.DEV;
+    disconnectFive.addEventListener('click', () => actions.disconnectFor(5_000));
+    disconnectExpire.addEventListener('click', () => actions.disconnectFor(16_000));
     this.createButton.addEventListener('click', () => {
       actions.createRoom(this.playerNameInput.value);
     });
@@ -105,7 +113,8 @@ export class DebugPanel {
       this.updatePredictionToggle();
     });
     this.updatePredictionToggle();
-    if (!import.meta.env.DEV) {
+    if (!shouldShowDebugControls(import.meta.env.DEV)) {
+      this.root.hidden = true;
       this.teleportButton.hidden = true;
       this.teleportOntoButton.hidden = true;
       this.flipButton.hidden = true;
@@ -138,8 +147,23 @@ export class DebugPanel {
       this.underbodyButton.disabled = true;
       this.playerCollisionButton.disabled = true;
       this.forceResyncButton.disabled = true;
-    } else {
+    } else if (state === 'CONNECTED') {
       this.setMessage('Connected. Create or join a room.');
+    } else {
+      this.setMessage(
+        state === 'RECONNECTING'
+          ? 'Reconnecting; your room slot is reserved.'
+          : 'Connection failed. Return to lobby.',
+        state === 'FAILED',
+      );
+      this.resetButton.disabled =
+        this.teleportButton.disabled =
+        this.teleportOntoButton.disabled =
+        this.flipButton.disabled =
+        this.underbodyButton.disabled =
+        this.playerCollisionButton.disabled =
+        this.forceResyncButton.disabled =
+          true;
     }
   }
 
@@ -181,6 +205,21 @@ export class DebugPanel {
 
   public clearSnapshotRate(): void {
     this.snapshotRateElement.textContent = '—';
+  }
+
+  public clearRoomTelemetry(): void {
+    this.clearSnapshotRate();
+    this.setInputSequence(0);
+    this.vehicleSpeedElement.textContent = '0 km/h';
+    for (const element of [
+      this.vehiclePositionElement,
+      this.vehicleDebugElement,
+      this.convoyDebugElement,
+      this.surfaceDebugElement,
+      this.trailerDebugElement,
+      this.recoveryDebugElement,
+    ])
+      element.textContent = '—';
   }
 
   public setVehicleTelemetry(
@@ -238,6 +277,10 @@ export class DebugPanel {
     this.networkJitterElement.textContent = `${network.jitterMs.toFixed(1)} ms`;
   }
 
+  public setRenderStats(fps: number, drawCalls: number, triangles: number): void {
+    this.renderStatsElement.textContent = `${fps.toFixed(0)} FPS · ${drawCalls} calls · ${triangles.toLocaleString('en-US')} tris`;
+  }
+
   public setMessage(message: string, isError = false): void {
     this.messageElement.textContent = message;
     this.messageElement.dataset['error'] = String(isError);
@@ -247,6 +290,10 @@ export class DebugPanel {
     this.predictionToggle.textContent = `LOCAL PREDICTION: ${this.predictionEnabled ? 'ON' : 'OFF'}`;
     this.predictionToggle.dataset['enabled'] = String(this.predictionEnabled);
   }
+}
+
+export function shouldShowDebugControls(isDevelopment: boolean): boolean {
+  return isDevelopment;
 }
 
 function formatVector(vector: readonly [number, number, number]): string {

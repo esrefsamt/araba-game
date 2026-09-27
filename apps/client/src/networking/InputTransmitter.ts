@@ -40,6 +40,13 @@ export class InputTransmitter {
     this.enabled = enabled;
   }
 
+  public resetSequence(lastProcessedSequence: number): void {
+    this.sequence = Math.max(
+      0,
+      Number.isSafeInteger(lastProcessedSequence) ? lastProcessedSequence : 0,
+    );
+  }
+
   private transmit(): void {
     if (!this.enabled) return;
     const nextSequence = this.sequence + 1;

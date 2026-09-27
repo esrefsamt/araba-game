@@ -4,8 +4,13 @@ const server = new GameServer();
 
 async function shutdown(signal: string): Promise<void> {
   console.info(`[server] received ${signal}; shutting down`);
-  await server.stop();
-  process.exit(0);
+  try {
+    await server.stop();
+    process.exitCode = 0;
+  } catch (error: unknown) {
+    console.error('[server] shutdown failed:', error);
+    process.exitCode = 1;
+  }
 }
 
 process.once('SIGINT', () => {

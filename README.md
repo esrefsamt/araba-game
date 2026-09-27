@@ -61,9 +61,9 @@ Vehicles use Rapier's dynamic raycast vehicle controller: a rounded dynamic chas
 
 The truck and trailer use position-based kinematic Rapier bodies following the existing oval centerline. This keeps the gameplay platform deterministic and avoids joint jackknife/jitter. Rapier supplies their contact velocities; controller-level surface-relative velocity, rolling resistance, grip, and a bounded neutral-input static-friction assist keep a dynamic vehicle stable on the rotating deck without making the player vehicle authoritative or kinematic.
 
-Rooms support up to eight players. Empty rooms are removed automatically, and disconnects trigger player cleanup plus `player_left` notifications.
+Rooms support up to eight players, including players in the 15-second disconnect grace period. Unexpected disconnects keep identity, vehicle, ready state and scores until reconnect or expiry; explicit leave cleans up immediately. Empty rooms are removed automatically. Host authority moves immediately to the oldest connected player, and returning hosts keep the migrated authority.
 
-The room state machine is `LOBBY → COUNTDOWN → PLAYING → RESULTS`. Countdown and the 90-second round use simulation ticks. Only genuine raycast-wheel support from the trailer deck earns time; ramp, ground, air, and truck contacts do not. A 150 ms contact grace prevents suspension flicker. Round ranking uses total trailer ticks, then best streak and join order; position points persist across rounds as room-session points. Late joiners wait for the next round, and host authority migrates to the oldest remaining player.
+The room state machine is `LOBBY → COUNTDOWN → PLAYING → RESULTS`. Countdown and the 90-second round use simulation ticks. Only genuine raycast-wheel support from the trailer deck earns time; ramp, ground, air, and truck contacts do not. A 150 ms contact grace prevents suspension flicker. Round ranking uses total trailer ticks, then best streak and join order; position points persist across rounds as room-session points. Players joining during PLAYING immediately participate with zero trailer time and the existing remaining timer; COUNTDOWN joiners participate when controls unlock at PLAYING. RESULTS joiners enter the next round without changing completed results. Spawns skip occupied vehicle/convoy positions, and host authority migrates to the oldest remaining player.
 
 ## Commands
 
@@ -77,3 +77,23 @@ pnpm test
 pnpm lint
 pnpm format:check
 ```
+
+## Sessions and reconnect
+
+The server issues a cryptographically random 256-bit session capability. The browser stores it in endpoint-scoped `sessionStorage` so refresh can resume the same player. There are no accounts or persistent login. Do not log or share this token. A healthy active connection rejects duplicate claims; a dead or timed-out connection can be replaced.
+
+On disconnect the server neutralizes controls and suspends scoring immediately, while retaining the same physics body. The client retries with 0.5 / 1 / 2 / 3 / 5-second delays within the grace window. Resume sends one complete authoritative world snapshot, clears old interpolation/prediction buffers and inputs, and continues input sequences from the server acknowledgement. Historical particles and audio events are not replayed. Expired sessions or server restart show a recoverable connection error and a return-to-lobby action.
+
+Native WebSocket ping/pong checks transport health every five seconds with a 15-second timeout. Browser implementations answer native ping frames automatically; the existing application ping/pong still measures latency. A central server sweep handles disconnected sessions. Development retains latency/jitter controls and adds buttons for five- and sixteen-second disconnect simulations.
+
+LEAVE ROOM is available throughout a match. It sends an ownership-checked intentional leave, removes the player/vehicle/scoring state immediately, migrates the host if needed, and disposes an empty room without a reconnect grace period. The client waits for `room_left` before clearing room views, HUD, effects, input history and snapshot buffers. A rotated session capability has no room membership; the open WebSocket can join or create another room from ROOM SELECT. Name and sound preferences survive the switch. Refresh or reconnect after leaving cannot resume the old room. Pending room actions disable duplicate submissions; an unconfirmed leave returns to a recoverable connection screen after five seconds.
+
+## Production configuration
+
+Set `VITE_WS_URL` before building the client (for example `wss://game.example.com/`). See `apps/client/.env.example`; Vite supports `.env.local`. Without an override, production selects `ws://` or `wss://` from the page protocol and uses its host. Development uses the page host on port 3000. An HTTPS page rejects an insecure `ws://` override.
+
+Run `pnpm build`, serve `apps/client/dist` as static files, and run `pnpm --filter @trailer-arena/server start` with the server process environment configured. `apps/server/.env.example` documents the settings; it is an example, not an automatically loaded file. Defaults are `PORT=3000`, `HOST=0.0.0.0`, `SESSION_GRACE_MS=15000`, `HEARTBEAT_INTERVAL_MS=5000`, `HEARTBEAT_TIMEOUT_MS=15000` and `SHUTDOWN_TIMEOUT_MS=5000`. Set `NODE_ENV=production` to disable server development commands and duration overrides. No gameplay constants change.
+
+Terminate TLS at your hosting platform or reverse proxy and forward WebSocket Upgrade requests to the server's HTTP port. Serve the client over HTTPS and use a matching `wss://` endpoint. The game server itself serves plain HTTP/WebSocket. `GET /health` returns only status, room count, player count (including grace slots), and process uptime in seconds. SIGINT/SIGTERM stops new upgrades, stops simulation, closes sockets with code 1001, and disposes rooms; unresponsive connections are terminated after the shutdown deadline.
+
+Room creation/join, reconnect and leave share a per-connection guard of six requests per ten seconds; the existing input guard remains intact. WebSocket payloads are limited to 16 KiB and session tokens are strictly validated. Rooms and sessions are in memory: restart discards them, and deployments must route a room's players to the same process. This phase adds no database or multi-process room routing.

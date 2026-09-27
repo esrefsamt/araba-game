@@ -35,13 +35,17 @@ export class VehicleSystem {
     return this.playerCollisions.lastImpact;
   }
 
-  public spawnVehicle(playerId: string): ServerVehicle {
+  public drainPlayerImpacts(): PlayerImpactMeasurement[] {
+    return this.playerCollisions.drainImpacts();
+  }
+
+  public spawnVehicle(playerId: string, spawnPoint?: VehicleSpawnPoint): ServerVehicle {
     const existingVehicle = this.vehicles.get(playerId);
     if (existingVehicle !== undefined) {
       return existingVehicle;
     }
 
-    const spawned = this.spawner.spawn();
+    const spawned = this.spawner.spawn(spawnPoint);
     const vehicle = new ServerVehicle(
       playerId,
       this.world,

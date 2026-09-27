@@ -11,6 +11,7 @@ export interface GamePlayerStateSnapshot {
   bestStreakTicks: number;
   roundPoints: number;
   sessionPoints: number;
+  connectionState?: 'CONNECTED' | 'DISCONNECTED_GRACE';
 }
 
 export interface RoundResultSnapshot {

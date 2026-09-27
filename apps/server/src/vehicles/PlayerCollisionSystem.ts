@@ -54,10 +54,15 @@ export class PlayerCollisionSystem {
   private readonly assistedNormal = { x: 0, y: 0, z: 0 };
   private readonly impulse = { x: 0, y: 0, z: 0 };
   private readonly attackerCorrectionImpulse = { x: 0, y: 0, z: 0 };
+  private readonly pendingImpacts: PlayerImpactMeasurement[] = [];
   private latestImpact: PlayerImpactMeasurement | null = null;
 
   public get lastImpact(): PlayerImpactMeasurement | null {
     return this.latestImpact;
+  }
+
+  public drainImpacts(): PlayerImpactMeasurement[] {
+    return this.pendingImpacts.splice(0, this.pendingImpacts.length);
   }
 
   public capturePreStepMotion(vehicles: ReadonlyMap<string, ServerVehicle>): void {
@@ -247,6 +252,7 @@ export class PlayerCollisionSystem {
         firstAngularVelocityAfterAssist: toTuple(first.body.angvel()),
         secondAngularVelocityAfterAssist: toTuple(second.body.angvel()),
       };
+      this.pendingImpacts.push(this.latestImpact);
     });
 
     // A CCD impact can start and stop inside the same physics step while still
@@ -273,6 +279,7 @@ export class PlayerCollisionSystem {
     this.motionSamples.clear();
     this.assistedPairs.clear();
     this.pairCooldownSeconds.clear();
+    this.pendingImpacts.length = 0;
     this.latestImpact = null;
   }
 

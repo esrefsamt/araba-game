@@ -7,6 +7,8 @@ import type { VehicleStateSnapshot } from '@trailer-arena/shared';
 import * as THREE from 'three';
 
 import { SnapshotBuffer } from '../networking/SnapshotBuffer.js';
+import { playerColorHex } from '../visuals/PlayerPalette.js';
+import { WheelVisualKinematics } from './WheelVisualKinematics.js';
 
 export type VehicleTransformWriteSource = 'PREDICTION' | 'INTERPOLATION';
 
@@ -23,7 +25,12 @@ export class VehicleView {
   private readonly toRotation = new THREE.Quaternion();
   private readonly extrapolatedRotation = new THREE.Quaternion();
   private readonly angularAxis = new THREE.Vector3();
-  private readonly wheels: THREE.Mesh[] = [];
+  private readonly wheelSpins: THREE.Group[] = [];
+  private readonly wheelPivots: THREE.Group[] = [];
+  private readonly frontWheelPivots: THREE.Group[] = [];
+  private readonly wheelMotion = new WheelVisualKinematics();
+  private wheelSteeringInput: number | null = null;
+  private nameplate: THREE.Sprite | null = null;
   private sampledState: VehicleStateSnapshot | null = null;
   private transformWriteSource: VehicleTransformWriteSource | 'NONE' = 'NONE';
   private writesThisFrame = 0;
@@ -66,7 +73,7 @@ export class VehicleView {
       this.object.position.z += platformRenderOffset[2];
     }
     this.object.quaternion.fromArray(state.rotation);
-    this.rotateWheels(state.forwardSpeed, deltaSeconds);
+    this.animateWheels(state, deltaSeconds);
   }
 
   public sampleAuthoritativeState(renderTick: number): VehicleStateSnapshot | null {
@@ -151,10 +158,51 @@ export class VehicleView {
     return this.snapshots.size;
   }
 
-  private rotateWheels(forwardSpeed: number, deltaSeconds: number): void {
-    const wheelRotation = (forwardSpeed * deltaSeconds) / VEHICLE_DIMENSIONS.wheelRadius;
-    for (const wheel of this.wheels) {
-      wheel.rotateX(wheelRotation);
+  public setPlayerIdentity(playerName: string, isLocal: boolean): void {
+    if (isLocal) {
+      if (this.nameplate !== null) this.nameplate.visible = false;
+      return;
+    }
+    if (this.nameplate === null && typeof document !== 'undefined') {
+      this.nameplate = createNameplate(playerName, playerColorHex(this.playerId));
+      this.object.add(this.nameplate);
+    }
+    if (this.nameplate !== null) this.nameplate.visible = true;
+  }
+
+  public updateNameplate(cameraPosition: THREE.Vector3): void {
+    if (this.nameplate === null) return;
+    const distance = cameraPosition.distanceTo(this.object.position);
+    this.nameplate.visible = distance < 52;
+    (this.nameplate.material as THREE.SpriteMaterial).opacity = THREE.MathUtils.clamp(
+      1 - (distance - 22) / 30,
+      0,
+      1,
+    );
+  }
+
+  public setWheelSteeringInput(input: number | null): void {
+    this.wheelSteeringInput = input;
+  }
+
+  private animateWheels(state: VehicleStateSnapshot, deltaSeconds: number): void {
+    // On a moving trailer, use motion relative to the support rather than spinning
+    // parked wheels at the convoy's world speed. Lateral RAM velocity is excluded.
+    const longitudinalSpeed = state.onTrailer
+      ? state.relativeForwardSpeed
+      : state.forwardSpeed;
+    this.wheelMotion.update(
+      longitudinalSpeed,
+      this.wheelSteeringInput,
+      state.wheelContacts,
+      deltaSeconds,
+    );
+    for (const spin of this.wheelSpins) spin.rotation.x = this.wheelMotion.spin;
+    for (const pivot of this.frontWheelPivots) {
+      pivot.rotation.y = this.wheelMotion.steering;
+    }
+    for (const pivot of this.wheelPivots) {
+      pivot.position.y = this.wheelMotion.centerY;
     }
   }
 
@@ -166,7 +214,7 @@ export class VehicleView {
     this.recordTransformWrite(source);
     this.object.position.fromArray(state.position);
     this.object.quaternion.fromArray(state.rotation);
-    this.rotateWheels(state.forwardSpeed, deltaSeconds);
+    this.animateWheels(state, deltaSeconds);
   }
 
   private recordTransformWrite(source: VehicleTransformWriteSource): void {
@@ -191,12 +239,15 @@ export class VehicleView {
         } else {
           child.material.dispose();
         }
+      } else if (child instanceof THREE.Sprite) {
+        child.material.map?.dispose();
+        child.material.dispose();
       }
     });
   }
 
   private buildModel(): void {
-    const bodyColor = colorFromPlayerId(this.playerId);
+    const bodyColor = playerColorHex(this.playerId);
     const bodyMaterial = new THREE.MeshStandardMaterial({
       color: bodyColor,
       roughness: 0.72,
@@ -209,9 +260,15 @@ export class VehicleView {
       flatShading: true,
     });
     const glassMaterial = new THREE.MeshStandardMaterial({
-      color: 0x92bac4,
+      color: 0x8ebbc8,
       roughness: 0.35,
       metalness: 0.12,
+      flatShading: true,
+    });
+    const chromeMaterial = new THREE.MeshStandardMaterial({
+      color: 0xc7d2cf,
+      roughness: 0.45,
+      metalness: 0.4,
       flatShading: true,
     });
 
@@ -226,13 +283,19 @@ export class VehicleView {
       ),
       bodyMaterial,
     );
-    body.position.y = 0.05;
+    body.scale.set(1, 0.88, 0.98);
+    body.position.y = 0.02;
     body.castShadow = true;
     body.receiveShadow = true;
     this.object.add(body);
 
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.72, 1.7), glassMaterial);
-    cabin.position.set(0, 0.73, -0.3);
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(1.58, 0.26, 1.24), bodyMaterial);
+    hood.position.set(0, 0.43, 1.12);
+    hood.castShadow = true;
+    this.object.add(hood);
+
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.48, 0.72, 1.58), glassMaterial);
+    cabin.position.set(0, 0.75, -0.33);
     cabin.scale.set(0.94, 1, 0.9);
     cabin.castShadow = true;
     this.object.add(cabin);
@@ -241,6 +304,22 @@ export class VehicleView {
     roof.position.set(0, 1.12, -0.35);
     roof.castShadow = true;
     this.object.add(roof);
+
+    const windshield = new THREE.Mesh(
+      new THREE.BoxGeometry(1.24, 0.46, 0.045),
+      glassMaterial,
+    );
+    windshield.position.set(0, 0.78, 0.39);
+    windshield.rotation.x = -0.16;
+    this.object.add(windshield);
+    for (const x of [-0.755, 0.755]) {
+      const sideWindow = new THREE.Mesh(
+        new THREE.BoxGeometry(0.045, 0.4, 0.82),
+        glassMaterial,
+      );
+      sideWindow.position.set(x, 0.8, -0.34);
+      this.object.add(sideWindow);
+    }
 
     const bumperGeometry = new THREE.BoxGeometry(1.68, 0.18, 0.16);
     const frontBumper = new THREE.Mesh(bumperGeometry, darkMaterial);
@@ -262,6 +341,37 @@ export class VehicleView {
       this.object.add(headlight);
     }
 
+    const tailMaterial = new THREE.MeshStandardMaterial({
+      color: 0xe65f62,
+      emissive: 0x521414,
+      emissiveIntensity: 0.7,
+    });
+    for (const x of [-0.61, 0.61]) {
+      const taillight = new THREE.Mesh(lightGeometry, tailMaterial);
+      taillight.position.set(x, 0.09, -1.99);
+      this.object.add(taillight);
+    }
+
+    const roofDetail = new THREE.Mesh(
+      new THREE.BoxGeometry(0.42, 0.11, 0.28),
+      chromeMaterial,
+    );
+    roofDetail.position.set(0, 1.235, -0.42);
+    this.object.add(roofDetail);
+
+    const archGeometry = new THREE.TorusGeometry(0.46, 0.085, 5, 10, Math.PI);
+    for (const z of [
+      VEHICLE_DIMENSIONS.wheelBase / 2,
+      -VEHICLE_DIMENSIONS.wheelBase / 2,
+    ]) {
+      for (const x of [-0.92, 0.92]) {
+        const arch = new THREE.Mesh(archGeometry, bodyMaterial);
+        arch.position.set(x, -0.11, z);
+        arch.rotation.y = Math.PI / 2;
+        this.object.add(arch);
+      }
+    }
+
     const wheelGeometry = new THREE.CylinderGeometry(
       VEHICLE_DIMENSIONS.wheelRadius,
       VEHICLE_DIMENSIONS.wheelRadius,
@@ -270,14 +380,32 @@ export class VehicleView {
     );
     const halfTrack = VEHICLE_DIMENSIONS.trackWidth / 2 + 0.08;
     const halfWheelBase = VEHICLE_DIMENSIONS.wheelBase / 2;
+    const spokeGeometry = new THREE.BoxGeometry(
+      0.025,
+      VEHICLE_DIMENSIONS.wheelRadius * 1.4,
+      0.07,
+    );
     for (const z of [halfWheelBase, -halfWheelBase]) {
       for (const x of [halfTrack, -halfTrack]) {
+        const pivot = new THREE.Group();
+        pivot.name = `wheel-steer-${z > 0 ? 'front' : 'rear'}-${x > 0 ? 'right' : 'left'}`;
+        pivot.position.set(x, this.wheelMotion.centerY, z);
+        const spin = new THREE.Group();
+        spin.name = 'wheel-spin';
         const wheel = new THREE.Mesh(wheelGeometry, darkMaterial);
-        wheel.position.set(x, -0.34, z);
-        wheel.rotation.z = Math.PI / 2;
+        wheel.name = 'wheel-mesh';
+        // Cylinder's native +Y axle is aligned to +X once, below both pivots.
+        wheel.rotation.z = -Math.PI / 2;
         wheel.castShadow = true;
-        this.object.add(wheel);
-        this.wheels.push(wheel);
+        const spoke = new THREE.Mesh(spokeGeometry, chromeMaterial);
+        spoke.position.x = Math.sign(x) * (VEHICLE_DIMENSIONS.wheelWidth / 2 + 0.014);
+        spoke.name = 'wheel-spoke';
+        spin.add(wheel, spoke);
+        pivot.add(spin);
+        this.object.add(pivot);
+        this.wheelPivots.push(pivot);
+        if (z > 0) this.frontWheelPivots.push(pivot);
+        this.wheelSpins.push(spin);
       }
     }
   }
@@ -347,12 +475,32 @@ function applyAngularExtrapolationToSnapshot(
   rotation.premultiply(delta).normalize().toArray(state.rotation);
 }
 
-function colorFromPlayerId(playerId: string): THREE.Color {
-  let hash = 2_166_136_261;
-  for (let index = 0; index < playerId.length; index += 1) {
-    hash ^= playerId.charCodeAt(index);
-    hash = Math.imul(hash, 16_777_619);
+function createNameplate(playerName: string, color: number): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 64;
+  const context = canvas.getContext('2d');
+  if (context !== null) {
+    context.fillStyle = 'rgba(28, 41, 48, 0.82)';
+    context.beginPath();
+    context.roundRect(4, 6, 248, 50, 18);
+    context.fill();
+    context.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
+    context.fillRect(14, 20, 8, 22);
+    context.fillStyle = '#f6fbfa';
+    context.font = '700 24px system-ui, sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(playerName.slice(0, 16), 137, 32, 205);
   }
-  const hue = ((hash >>> 0) % 360) / 360;
-  return new THREE.Color().setHSL(hue, 0.55, 0.68);
+  const material = new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(canvas),
+    transparent: true,
+    depthTest: false,
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.position.set(0, 2.05, 0);
+  sprite.scale.set(3.2, 0.8, 1);
+  sprite.renderOrder = 10;
+  return sprite;
 }

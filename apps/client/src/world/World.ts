@@ -83,6 +83,7 @@ export class World {
   ): void {
     const renderTick = this.interpolationClock.getRenderTick();
     this.vehicles.beginRenderFrame();
+    this.vehicles.setLocalWheelSteering(input.steering);
     this.vehicles.update(renderTick, deltaSeconds);
     this.convoy.update(renderTick);
     if (this.prediction.isActive) {
@@ -146,6 +147,13 @@ export class World {
     return true;
   }
 
+  public resyncFromSnapshot(snapshot: WorldSnapshotMessage, localPlayerId: string): void {
+    this.clear();
+    this.setLocalPlayerId(localPlayerId);
+    this.applySnapshot(snapshot);
+    this.forceResync();
+  }
+
   public getPredictionMetrics(): PredictionMetrics {
     return this.prediction.metrics;
   }
@@ -160,6 +168,14 @@ export class World {
 
   public getLocalVehicleObject(): THREE.Object3D | null {
     return this.vehicles.getLocalObject();
+  }
+
+  public updateNameplates(cameraPosition: THREE.Vector3): void {
+    this.vehicles.updateNameplates(cameraPosition);
+  }
+
+  public getRemoteEngineStates() {
+    return this.vehicles.getRemoteEngineStates();
   }
 
   public getLocalVehicleSnapshot(): VehicleStateSnapshot | null {

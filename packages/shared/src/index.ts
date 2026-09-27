@@ -5,6 +5,8 @@ export * from './constants/ConvoyTuning.js';
 export * from './constants/PlayerCollisionTuning.js';
 export * from './constants/VehicleTuning.js';
 export * from './constants/WorldLayout.js';
+export * from './constants/InfieldLayout.js';
+export * from './constants/SessionConstants.js';
 export * from './protocol/ClientMessages.js';
 export * from './protocol/MessageTypes.js';
 export * from './protocol/ProtocolCodec.js';

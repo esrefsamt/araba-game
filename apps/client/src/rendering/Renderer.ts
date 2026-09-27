@@ -26,6 +26,13 @@ export class Renderer {
     this.instance.render(scene, camera);
   }
 
+  public get stats(): { drawCalls: number; triangles: number } {
+    return {
+      drawCalls: this.instance.info.render.calls,
+      triangles: this.instance.info.render.triangles,
+    };
+  }
+
   public dispose(): void {
     this.instance.dispose();
     this.instance.domElement.remove();

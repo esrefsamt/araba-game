@@ -40,6 +40,7 @@ export interface GameModeOptions {
 
 export class GameModeSystem {
   private readonly players = new Map<string, PlayerGameState>();
+  private readonly disconnectedPlayerIds = new Set<string>();
   private readonly countdownTicks: number;
   private readonly roundDurationTicks: number;
   private readonly contactGraceTicks: number;
@@ -67,7 +68,7 @@ export class GameModeSystem {
 
   public addPlayer(playerId: string, playerName: string): void {
     if (this.players.has(playerId)) return;
-    const participant = this.phase === 'LOBBY';
+    const participant = this.phase !== 'RESULTS';
     this.players.set(playerId, {
       playerId,
       playerName,
@@ -88,12 +89,33 @@ export class GameModeSystem {
 
   public removePlayer(playerId: string): void {
     if (!this.players.delete(playerId)) return;
+    this.disconnectedPlayerIds.delete(playerId);
     if (this.hostPlayerId === playerId) {
-      this.hostPlayerId =
-        Array.from(this.players.values()).sort(
-          (first, second) => first.joinOrder - second.joinOrder,
-        )[0]?.playerId ?? null;
+      this.migrateHost();
     }
+  }
+
+  public setPlayerConnected(playerId: string, connected: boolean): void {
+    const player = this.players.get(playerId);
+    if (player === undefined) return;
+    if (connected) {
+      this.disconnectedPlayerIds.delete(playerId);
+      if (this.hostPlayerId === null) this.migrateHost();
+    } else {
+      this.disconnectedPlayerIds.add(playerId);
+      // Stop contact grace immediately, preserving accumulated trailer/session scores.
+      player.isScoringOnTrailer = false;
+      player.currentStreakTicks = 0;
+      player.lastTrailerContactTick = null;
+      if (this.hostPlayerId === playerId) this.migrateHost();
+    }
+  }
+
+  private migrateHost(): void {
+    this.hostPlayerId =
+      Array.from(this.players.values())
+        .filter((player) => !this.disconnectedPlayerIds.has(player.playerId))
+        .sort((first, second) => first.joinOrder - second.joinOrder)[0]?.playerId ?? null;
   }
 
   public setReady(playerId: string, ready: boolean): boolean {
@@ -143,7 +165,8 @@ export class GameModeSystem {
     }
 
     for (const player of this.players.values()) {
-      if (!player.participant) continue;
+      if (!player.participant || this.disconnectedPlayerIds.has(player.playerId))
+        continue;
       updateTrailerScore(
         player,
         tick,
@@ -155,7 +178,11 @@ export class GameModeSystem {
   }
 
   public canPlayerControl(playerId: string): boolean {
-    return this.phase === 'PLAYING' && (this.players.get(playerId)?.participant ?? false);
+    return (
+      this.phase === 'PLAYING' &&
+      !this.disconnectedPlayerIds.has(playerId) &&
+      (this.players.get(playerId)?.participant ?? false)
+    );
   }
 
   public createSnapshot(): GameStateSnapshot {
@@ -178,14 +205,18 @@ export class GameModeSystem {
 
   public dispose(): void {
     this.players.clear();
+    this.disconnectedPlayerIds.clear();
     this.results = [];
     this.hostPlayerId = null;
   }
 
   private canStartMatch(): boolean {
-    if (this.players.size === 0) return false;
-    if (this.players.size === 1) return true;
-    return Array.from(this.players.values()).every((player) => player.ready);
+    const connected = Array.from(this.players.values()).filter(
+      (player) => !this.disconnectedPlayerIds.has(player.playerId),
+    );
+    if (connected.length === 0) return false;
+    if (connected.length === 1) return true;
+    return connected.every((player) => player.ready);
   }
 
   private beginCountdown(tick: number): void {

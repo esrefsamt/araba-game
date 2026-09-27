@@ -4,6 +4,15 @@ export interface JoinRoomMessage {
   roomId?: string;
 }
 
+export interface ReconnectSessionMessage {
+  type: 'reconnect_session';
+  sessionToken: string;
+}
+
+export interface LeaveRoomMessage {
+  type: 'leave_room';
+}
+
 export interface PingMessage {
   type: 'ping';
   timestamp: number;
@@ -61,6 +70,8 @@ export interface DebugTestPlayerCollisionMessage {
 
 export type ClientMessage =
   | JoinRoomMessage
+  | ReconnectSessionMessage
+  | LeaveRoomMessage
   | PingMessage
   | PlayerInputMessage
   | ResetVehicleMessage

@@ -7,10 +7,54 @@
       name="description"
       content="Trailer Arena multiplayer infrastructure test scene"
     />
-    <title>Trailer Arena — Phase 5 Network Prediction</title>
+    <title>Trailer Arena — County Shunt</title>
   </head>
   <body>
     <main id="game-root" aria-label="Trailer Arena test scene"></main>
+
+    <div id="session-status" class="session-status" aria-live="polite">DISCONNECTED</div>
+    <section id="session-entry" class="session-card" aria-label="Multiplayer lobby">
+      <p class="eyebrow">COUNTY SHUNT MOTOR CLUB</p>
+      <h1>TRAILER ARENA</h1>
+      <p>
+        ROOM SELECT · Create a room or enter a code. Leave any match to switch rooms here.
+      </p>
+      <label for="session-name">Your name</label>
+      <input id="session-name" value="Player" maxlength="16" autocomplete="nickname" />
+      <button id="session-create" type="button">CREATE A ROOM</button>
+      <label for="session-room-code">Room code</label>
+      <div class="session-join-row">
+        <input
+          id="session-room-code"
+          placeholder="ABC123"
+          maxlength="6"
+          autocomplete="off"
+        />
+        <button id="session-join" type="button">JOIN</button>
+      </div>
+      <p id="session-message" class="session-message" role="status"></p>
+    </section>
+    <nav id="room-tools" class="room-tools" aria-label="Room controls" hidden>
+      <span>ROOM <strong id="room-tools-code">—</strong></span>
+      <button id="copy-room-code" type="button">COPY ROOM CODE</button>
+      <button id="leave-room" type="button">LEAVE ROOM</button>
+    </nav>
+    <section
+      id="connection-overlay"
+      class="session-card connection-overlay"
+      role="status"
+      aria-live="polite"
+      hidden
+    >
+      <h2 id="connection-overlay-title">CONNECTING…</h2>
+      <p id="connection-overlay-detail">
+        Your place is held for 15 seconds after a lost connection.
+      </p>
+      <button id="session-connect" type="button" hidden>RETURN TO LOBBY</button>
+    </section>
+    <div id="reconnected-feedback" class="reconnected-feedback" role="status" hidden>
+      RECONNECTED
+    </div>
 
     <section id="game-hud" class="game-hud" aria-label="Game HUD" hidden>
       <div class="game-timer" hidden>
@@ -30,6 +74,7 @@
         <strong>ROUND IN PROGRESS</strong>
         <span>Waiting for next round…</span>
       </div>
+      <button id="sound-toggle" class="sound-toggle" type="button">SOUND: ON</button>
 
       <section id="lobby-panel" class="game-card lobby-panel" hidden>
         <p class="eyebrow">ROOM <strong id="lobby-room-code">—</strong></p>
@@ -53,7 +98,9 @@
       </section>
     </section>
 
-    <aside class="debug-panel" aria-label="Network debug panel">
+    <div id="feedback-overlay" class="feedback-overlay" aria-live="polite"></div>
+
+    <aside id="debug-panel" class="debug-panel" aria-label="Network debug panel">
       <div class="debug-panel__title">
         <span class="debug-panel__dot" aria-hidden="true"></span>
         NETWORK DEBUG
@@ -180,9 +227,19 @@
           <dt>Net Jitter</dt>
           <dd id="network-jitter">0.0 ms</dd>
         </div>
+        <div>
+          <dt>Render</dt>
+          <dd id="render-stats">0 FPS · 0 calls · 0 tris</dd>
+        </div>
       </dl>
 
       <div class="debug-panel__controls">
+        <button id="disconnect-five" type="button" class="secondary-button">
+          DISCONNECT 5s (DEBUG)
+        </button>
+        <button id="disconnect-expire" type="button" class="secondary-button">
+          DISCONNECT 16s (DEBUG)
+        </button>
         <label for="player-name">Player name</label>
         <input
           id="player-name"
@@ -266,7 +323,7 @@
 
     <div class="scene-label" aria-hidden="true">
       <strong>TRAILER ARENA</strong>
-      <span>PHASE 5 · PREDICTED CLIENT / AUTHORITATIVE SERVER</span>
+      <span>COUNTY SHUNT · SERVER AUTHORITATIVE ARCADE</span>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

@@ -5,9 +5,11 @@ import {
   TRAILER_DIMENSIONS,
 } from '@trailer-arena/shared';
 import type {
+  GameplayEventMessage,
   GameStateSnapshot,
   PlayerInputMessage,
   VehicleStateSnapshot,
+  WorldSnapshotMessage,
 } from '@trailer-arena/shared';
 import type { ConvoyStateSnapshot } from '@trailer-arena/shared';
 
@@ -16,6 +18,7 @@ import { GameModeSystem, type GameActionResult } from '../gameplay/GameModeSyste
 import type { ServerPlayer } from '../players/ServerPlayer.js';
 import { VehicleSystem } from '../vehicles/VehicleSystem.js';
 import { createRoomPhysicsContext } from '../world/PhysicsWorldBuilder.js';
+import { selectRoomSpawn } from './RoomSpawnSelector.js';
 
 export type AddPlayerResult =
   { ok: true } | { ok: false; reason: 'ROOM_FULL' | 'PLAYER_ALREADY_PRESENT' };
@@ -29,6 +32,7 @@ export class GameRoom {
   private readonly deckSupportedPlayerIds = new Set<string>();
   private readonly debugUnderbodyCases = new Map<string, number>();
   private debugPlayerCollisionCase = 0;
+  private gameplayEventSequence = 0;
   private currentTick = 0;
 
   public constructor(
@@ -69,10 +73,13 @@ export class GameRoom {
       return { ok: false, reason: 'ROOM_FULL' };
     }
 
+    const vehicle = this.vehicleSystem.spawnVehicle(
+      player.id,
+      selectRoomSpawn(this.physicsWorld),
+    );
     this.players.set(player.id, player);
-    const vehicle = this.vehicleSystem.spawnVehicle(player.id);
-    vehicle.setControlsEnabled(false);
     this.gameModeSystem.addPlayer(player.id, player.name);
+    vehicle.setControlsEnabled(this.gameModeSystem.canPlayerControl(player.id));
     return { ok: true };
   }
 
@@ -82,6 +89,8 @@ export class GameRoom {
       this.vehicleSystem.removeVehicle(playerId);
       this.gameModeSystem.removePlayer(playerId);
       this.players.delete(playerId);
+      this.debugUnderbodyCases.delete(playerId);
+      this.deckSupportedPlayerIds.delete(playerId);
     }
     return player;
   }
@@ -92,6 +101,18 @@ export class GameRoom {
 
   public getPlayers(): readonly ServerPlayer[] {
     return Array.from(this.players.values());
+  }
+
+  public setPlayerConnected(playerId: string, connected: boolean): boolean {
+    const player = this.players.get(playerId);
+    if (player === undefined) return false;
+    player.connectionState = connected ? 'CONNECTED' : 'DISCONNECTED_GRACE';
+    this.gameModeSystem.setPlayerConnected(playerId, connected);
+    this.vehicleSystem.setPlayerControlsEnabled(
+      playerId,
+      connected && this.gameModeSystem.canPlayerControl(playerId),
+    );
+    return true;
   }
 
   public getVehicleSystem(): VehicleSystem {
@@ -485,7 +506,42 @@ export class GameRoom {
   }
 
   public createGameStateSnapshot(): GameStateSnapshot {
-    return this.gameModeSystem.createSnapshot();
+    const snapshot = this.gameModeSystem.createSnapshot();
+    for (const state of snapshot.players)
+      state.connectionState =
+        this.players.get(state.playerId)?.connectionState ?? 'DISCONNECTED_GRACE';
+    return snapshot;
+  }
+
+  public createWorldSnapshot(): WorldSnapshotMessage {
+    return {
+      type: 'world_snapshot',
+      serverTick: this.currentTick,
+      vehicles: this.createVehicleSnapshot(),
+      convoy: this.createConvoySnapshot(),
+      gameState: this.createGameStateSnapshot(),
+    };
+  }
+
+  public drainGameplayEvents(): GameplayEventMessage[] {
+    return this.vehicleSystem.drainPlayerImpacts().map((impact) => {
+      const targetPosition = this.vehicleSystem
+        .getVehicle(impact.targetPlayerId)
+        ?.body.translation();
+      return {
+        type: 'gameplay_event',
+        event: {
+          eventType: 'ram_hit',
+          eventId: `${this.id}:${this.currentTick}:${this.gameplayEventSequence++}`,
+          attackerPlayerId: impact.attackerPlayerId,
+          targetPlayerId: impact.targetPlayerId,
+          strength: impact.impactCurve,
+          position: targetPosition
+            ? [targetPosition.x, targetPosition.y, targetPosition.z]
+            : [0, 0, 0],
+        },
+      };
+    });
   }
 
   public update(deltaSeconds: number, tick: number): void {
@@ -508,7 +564,7 @@ export class GameRoom {
     if (transition === 'PLAYING_STARTED') {
       this.vehicleSystem.setAllControlsEnabled(false);
       for (const player of this.gameModeSystem.createSnapshot().players) {
-        if (player.participant) {
+        if (player.participant && this.players.get(player.playerId)?.isConnected) {
           this.vehicleSystem.setPlayerControlsEnabled(player.playerId, true);
         }
       }

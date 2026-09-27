@@ -1,4 +1,5 @@
 import './style.css';
+import './session.css';
 
 import { Game } from './core/Game.js';
 
