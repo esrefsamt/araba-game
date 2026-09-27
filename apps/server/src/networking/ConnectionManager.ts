@@ -22,6 +22,7 @@ import { ServerPlayer } from '../players/ServerPlayer.js';
 import type { GameRoom } from '../rooms/GameRoom.js';
 import type { RoomManager } from '../rooms/RoomManager.js';
 import { SessionRegistry, type PlayerSession } from './SessionRegistry.js';
+import { serverLogger } from '../server/ServerLogger.js';
 
 interface ClientConnection {
   readonly clientId: string;
@@ -138,7 +139,7 @@ export class ConnectionManager {
       connection.lastReceivedAt = this.now();
     });
     socket.on('error', (error) => {
-      console.warn(`[network] ${connection.clientId} socket error:`, error.message);
+      serverLogger.warn(`[network] ${connection.clientId} socket error:`, error.message);
     });
 
     this.send(connection, {
@@ -147,7 +148,7 @@ export class ConnectionManager {
       sessionToken: connection.session.token,
       reconnectWindowMs: this.graceMs,
     });
-    console.info(`[network] connected ${connection.clientId}`);
+    serverLogger.info(`[network] connected ${connection.clientId}`);
   }
 
   public broadcast(message: ServerMessage): void {
@@ -201,7 +202,7 @@ export class ConnectionManager {
     try {
       this.handleMessage(connection, decoded.value);
     } catch (error: unknown) {
-      console.error(
+      serverLogger.error(
         `[network] message handling failed for ${connection.clientId}`,
         error,
       );
@@ -364,7 +365,7 @@ export class ConnectionManager {
       player.id,
     );
     this.broadcastToRoom(room, room.createWorldSnapshot());
-    console.info(`[room ${room.id}] joined ${player.name} (${player.id})`);
+    serverLogger.info(`[room ${room.id}] joined ${player.name} (${player.id})`);
   }
 
   private handleReconnect(connection: ClientConnection, token: string): void {
@@ -635,10 +636,10 @@ export class ConnectionManager {
       this.connectionsByPlayerId.delete(player.id);
       const room = this.roomManager.getRoom(roomId);
       room?.setPlayerConnected(player.id, false);
-      console.info(`[room ${roomId}] grace started for ${player.id}`);
+      serverLogger.info(`[room ${roomId}] grace started for ${player.id}`);
     }
     this.sessions.disconnect(connection.session, connection.clientId, this.now());
-    console.info(`[network] disconnected ${connection.clientId}`);
+    serverLogger.info(`[network] disconnected ${connection.clientId}`);
   }
 
   private sendError(

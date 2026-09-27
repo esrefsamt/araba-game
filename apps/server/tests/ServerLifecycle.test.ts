@@ -57,6 +57,7 @@ describe('production server lifecycle', () => {
       PORT: '8080',
       HOST: '127.0.0.1',
       NODE_ENV: 'production',
+      ALLOWED_ORIGINS: 'https://client.example',
     });
     expect(config).toMatchObject({
       port: 8080,

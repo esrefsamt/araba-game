@@ -10,7 +10,12 @@ export function resolveWebSocketUrl(
   location: Pick<Location, 'href' | 'protocol'>,
   development: boolean,
 ): string {
-  const url = configured?.trim() ? new URL(configured.trim()) : new URL(location.href);
+  let url: URL;
+  try {
+    url = configured?.trim() ? new URL(configured.trim()) : new URL(location.href);
+  } catch {
+    throw new Error('VITE_WS_URL must be a valid absolute ws:// or wss:// URL.');
+  }
   if (!configured?.trim()) {
     url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     if (development) url.port = '3000';

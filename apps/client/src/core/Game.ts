@@ -6,7 +6,7 @@ import { ArcadeFeedbackSystem } from '../effects/ArcadeFeedbackSystem.js';
 import { InputManager } from '../input/InputManager.js';
 import { InputTransmitter } from '../networking/InputTransmitter.js';
 import { NetworkClient } from '../networking/NetworkClient.js';
-import { resolveWebSocketUrl } from '../networking/ConnectionConfig.js';
+import { loadClientConfig } from '../config/ClientConfig.js';
 import { ChaseCamera } from '../camera/ChaseCamera.js';
 import { Renderer } from '../rendering/Renderer.js';
 import { SceneManager } from '../rendering/SceneManager.js';
@@ -20,11 +20,7 @@ export class Game {
   private readonly sceneManager = new SceneManager();
   private readonly chaseCamera = new ChaseCamera();
   private readonly networkClient = new NetworkClient(
-    resolveWebSocketUrl(
-      import.meta.env.VITE_WS_URL,
-      window.location,
-      import.meta.env.DEV,
-    ),
+    loadClientConfig(import.meta.env, window.location).webSocketUrl,
   );
   private readonly inputManager = new InputManager();
   private readonly audio = new AudioManager();

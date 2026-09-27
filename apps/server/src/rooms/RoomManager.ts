@@ -4,6 +4,7 @@ import { ROOM_ID_LENGTH } from '@trailer-arena/shared';
 
 import type { ServerPlayer } from '../players/ServerPlayer.js';
 import { GameRoom } from './GameRoom.js';
+import { serverLogger } from '../server/ServerLogger.js';
 
 const ROOM_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_ID_GENERATION_ATTEMPTS = 100;
@@ -35,6 +36,7 @@ export class RoomManager {
       if (!this.rooms.has(roomId)) {
         const room = new GameRoom(roomId);
         this.rooms.set(roomId, room);
+        serverLogger.info(`[room ${roomId}] created`);
         return room;
       }
     }
@@ -69,6 +71,7 @@ export class RoomManager {
     if (room.isEmpty) {
       this.rooms.delete(roomId);
       room.dispose();
+      serverLogger.info(`[room ${roomId}] destroyed`);
     }
     return removedPlayer;
   }
@@ -88,6 +91,7 @@ export class RoomManager {
   public dispose(): void {
     for (const room of this.rooms.values()) {
       room.dispose();
+      serverLogger.info(`[room ${room.id}] destroyed during shutdown`);
     }
     this.rooms.clear();
   }

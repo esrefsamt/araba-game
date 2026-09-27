@@ -6,9 +6,13 @@ import { WebSocketServer } from 'ws';
 import { ConnectionManager } from '../networking/ConnectionManager.js';
 import { RoomManager } from '../rooms/RoomManager.js';
 import { Simulation } from '../simulation/Simulation.js';
-import { loadServerConfig, type ServerConfig } from './ServerConfig.js';
-
-const MAX_WEBSOCKET_PAYLOAD_BYTES = 16 * 1_024;
+import {
+  loadServerConfig,
+  MAX_WEBSOCKET_PAYLOAD_BYTES,
+  type ServerConfig,
+} from './ServerConfig.js';
+import { isOriginAllowed } from './OriginPolicy.js';
+import { configureServerLogger, serverLogger } from './ServerLogger.js';
 
 export class GameServer {
   private readonly roomManager = new RoomManager();
@@ -42,6 +46,7 @@ export class GameServer {
       ...(typeof options === 'number' ? { port: options } : options),
     };
     this.connectionManager = new ConnectionManager(this.roomManager, this.config);
+    configureServerLogger(this.config.logLevel);
   }
 
   public get address(): AddressInfo | null {
@@ -50,13 +55,17 @@ export class GameServer {
   }
 
   public async start(): Promise<void> {
-    if (this.webSocketServer !== null) {
+    if (this.webSocketServer !== null || this.stopping !== null) {
       return;
     }
 
     await this.simulation.initialize();
+    if (this.stopping !== null) return;
     this.httpServer = createServer((request, response) => {
-      if (request.method === 'GET' && request.url === '/health') {
+      if (
+        request.method === 'GET' &&
+        (request.url === '/health' || request.url === '/ready')
+      ) {
         response.writeHead(this.acceptingConnections ? 200 : 503, {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-store',
@@ -77,11 +86,18 @@ export class GameServer {
     this.webSocketServer = new WebSocketServer({
       noServer: true,
       maxPayload: MAX_WEBSOCKET_PAYLOAD_BYTES,
+      perMessageDeflate: false,
     });
     this.httpServer.on('upgrade', (request, socket, head) => {
       const websocketServer = this.webSocketServer;
       if (!this.acceptingConnections || websocketServer === null) {
         socket.destroy();
+        return;
+      }
+      if (!isOriginAllowed(request.headers.origin, this.config)) {
+        socket.end(
+          'HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n',
+        );
         return;
       }
       websocketServer.handleUpgrade(request, socket, head, (client) =>
@@ -92,7 +108,7 @@ export class GameServer {
       this.connectionManager.handleConnection(socket);
     });
     this.webSocketServer.on('error', (error) => {
-      console.error('[server] WebSocket server error:', error);
+      serverLogger.error('[server] WebSocket server error:', error);
     });
 
     try {
@@ -100,6 +116,7 @@ export class GameServer {
         const httpServer = this.httpServer!;
         httpServer.once('error', reject);
         httpServer.listen(this.config.port, this.config.host, () => {
+          if (this.stopping !== null) httpServer.close();
           httpServer.off('error', reject);
           resolve();
         });
@@ -108,12 +125,13 @@ export class GameServer {
       await this.stop();
       throw error;
     }
+    if (this.stopping !== null) return;
     this.acceptingConnections = true;
     this.simulation.start();
-    console.info(
+    serverLogger.info(
       `[server] HTTP/WebSocket listening on ${this.config.host}:${this.address?.port}`,
     );
-    console.info('[server] authoritative simulation running at 60 Hz');
+    serverLogger.info('[server] authoritative simulation running at 60 Hz');
   }
 
   public stop(): Promise<void> {
