@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Trailer Arena multiplayer infrastructure test scene"
+    />
+    <title>Trailer Arena — Phase 5 Network Prediction</title>
+  </head>
+  <body>
+    <main id="game-root" aria-label="Trailer Arena test scene"></main>
+
+    <section id="game-hud" class="game-hud" aria-label="Game HUD" hidden>
+      <div class="game-timer" hidden>
+        <span>TIME</span>
+        <strong id="game-timer">01:30</strong>
+      </div>
+      <div class="trailer-time" hidden>
+        <span>TRAILER TIME</span>
+        <strong id="game-trailer-time" data-active="false">0.0s</strong>
+      </div>
+      <aside class="leaderboard" hidden>
+        <h2>STANDINGS</h2>
+        <div id="game-leaderboard"></div>
+      </aside>
+      <div id="countdown-overlay" class="countdown-overlay" hidden>3</div>
+      <div id="waiting-message" class="waiting-message" hidden>
+        <strong>ROUND IN PROGRESS</strong>
+        <span>Waiting for next round…</span>
+      </div>
+
+      <section id="lobby-panel" class="game-card lobby-panel" hidden>
+        <p class="eyebrow">ROOM <strong id="lobby-room-code">—</strong></p>
+        <h1>GET READY</h1>
+        <div id="lobby-players" class="lobby-players"></div>
+        <div class="game-card__actions">
+          <button id="ready-toggle" type="button">READY</button>
+          <button id="start-match" type="button" hidden>START MATCH</button>
+        </div>
+      </section>
+
+      <section id="results-panel" class="game-card results-panel" hidden>
+        <p class="eyebrow">ROUND COMPLETE</p>
+        <h1 id="results-title">ROUND RESULTS</h1>
+        <div class="results-header">
+          <span>#</span><span>PLAYER</span><span>TRAILER</span><span>PTS</span
+          ><span>SESSION</span>
+        </div>
+        <div id="results-rows"></div>
+        <button id="next-round" type="button" hidden>NEXT ROUND</button>
+      </section>
+    </section>
+
+    <aside class="debug-panel" aria-label="Network debug panel">
+      <div class="debug-panel__title">
+        <span class="debug-panel__dot" aria-hidden="true"></span>
+        NETWORK DEBUG
+      </div>
+
+      <dl class="debug-stats">
+        <div>
+          <dt>Connection</dt>
+          <dd id="connection-status" data-state="disconnected">DISCONNECTED</dd>
+        </div>
+        <div>
+          <dt>Local Player</dt>
+          <dd id="player-id">—</dd>
+        </div>
+        <div>
+          <dt>Room ID</dt>
+          <dd id="room-id">—</dd>
+        </div>
+        <div>
+          <dt>Ping</dt>
+          <dd id="ping">—</dd>
+        </div>
+        <div>
+          <dt>Server Tick</dt>
+          <dd id="server-tick">—</dd>
+        </div>
+        <div>
+          <dt>Speed</dt>
+          <dd id="vehicle-speed">0 km/h</dd>
+        </div>
+        <div>
+          <dt>Position</dt>
+          <dd id="vehicle-position">—</dd>
+        </div>
+        <div>
+          <dt>Snapshot Rate</dt>
+          <dd id="snapshot-rate">—</dd>
+        </div>
+        <div>
+          <dt>Input Sequence</dt>
+          <dd id="input-sequence">0</dd>
+        </div>
+        <div>
+          <dt>Vehicle Debug</dt>
+          <dd id="vehicle-debug">—</dd>
+        </div>
+        <div>
+          <dt>Convoy</dt>
+          <dd id="convoy-debug">—</dd>
+        </div>
+        <div>
+          <dt>Surface</dt>
+          <dd id="surface-debug">—</dd>
+        </div>
+        <div>
+          <dt>Trailer Relative</dt>
+          <dd id="trailer-debug">—</dd>
+        </div>
+        <div>
+          <dt>Recovery</dt>
+          <dd id="recovery-debug">—</dd>
+        </div>
+        <div>
+          <dt>Prediction</dt>
+          <dd id="prediction-status">OFF</dd>
+        </div>
+        <div>
+          <dt>Pending Inputs</dt>
+          <dd id="pending-inputs">0</dd>
+        </div>
+        <div>
+          <dt>Sent / Ack</dt>
+          <dd id="input-ack">-1 / -1</dd>
+        </div>
+        <div>
+          <dt>Aligned Error</dt>
+          <dd id="prediction-error">0.000 m · 0.000 m/s · 0.0°</dd>
+        </div>
+        <div>
+          <dt>Pred. Avg / Max</dt>
+          <dd id="prediction-average-error">0.000 m · max 0.000 m · vel 0.000 m/s</dd>
+        </div>
+        <div>
+          <dt>Visual Correction</dt>
+          <dd id="visual-correction-offset">0.000 m</dd>
+        </div>
+        <div>
+          <dt>Prediction Lead</dt>
+          <dd id="prediction-lead-offset">0.000 m · 0 ticks</dd>
+        </div>
+        <div>
+          <dt>Reconciliations</dt>
+          <dd id="reconciliation-stats">0.0/s</dd>
+        </div>
+        <div>
+          <dt>Replay</dt>
+          <dd id="prediction-replays">0.0 ticks/s</dd>
+        </div>
+        <div>
+          <dt>Meaningful Corr.</dt>
+          <dd id="correction-stats">0.0/s · 0 snaps</dd>
+        </div>
+        <div>
+          <dt>Prediction Tick</dt>
+          <dd id="prediction-tick">0</dd>
+        </div>
+        <div>
+          <dt>Local Writer</dt>
+          <dd id="prediction-writer">NONE · 0 writes · 0 conflicts</dd>
+        </div>
+        <div>
+          <dt>Pred / Auth Pos</dt>
+          <dd id="prediction-state">—</dd>
+        </div>
+        <div>
+          <dt>Pred / Auth Vel</dt>
+          <dd id="prediction-velocity">—</dd>
+        </div>
+        <div>
+          <dt>Snap Buffer</dt>
+          <dd id="snapshot-buffer">0 · 100 ms</dd>
+        </div>
+        <div>
+          <dt>Net Jitter</dt>
+          <dd id="network-jitter">0.0 ms</dd>
+        </div>
+      </dl>
+
+      <div class="debug-panel__controls">
+        <label for="player-name">Player name</label>
+        <input
+          id="player-name"
+          type="text"
+          value="Player"
+          minlength="1"
+          maxlength="16"
+          autocomplete="off"
+        />
+
+        <button id="create-room" type="button" disabled>CREATE ROOM</button>
+
+        <div class="join-row">
+          <input
+            id="room-code"
+            type="text"
+            maxlength="6"
+            placeholder="ROOM CODE"
+            aria-label="Room code"
+            autocomplete="off"
+          />
+          <button id="join-room" type="button" disabled>JOIN ROOM</button>
+        </div>
+
+        <button id="reset-vehicle" class="secondary-button" type="button" disabled>
+          RESET VEHICLE
+        </button>
+        <div id="network-simulation-controls" class="network-simulation">
+          <label for="network-latency">Network simulation latency</label>
+          <select id="network-latency">
+            <option value="0">0 ms</option>
+            <option value="50">50 ms</option>
+            <option value="100">100 ms</option>
+            <option value="150">150 ms</option>
+            <option value="200">200 ms</option>
+          </select>
+          <label for="network-jitter-select">Jitter</label>
+          <select id="network-jitter-select">
+            <option value="0">±0 ms</option>
+            <option value="20">±20 ms</option>
+            <option value="50">±50 ms</option>
+          </select>
+          <button id="force-resync" class="secondary-button" type="button" disabled>
+            FORCE RESYNC
+          </button>
+        </div>
+        <button id="prediction-toggle" class="secondary-button" type="button">
+          LOCAL PREDICTION: ON
+        </button>
+        <button id="teleport-trailer" class="secondary-button" type="button" disabled>
+          TELEPORT NEAR TRAILER
+        </button>
+        <button
+          id="teleport-onto-trailer"
+          class="secondary-button"
+          type="button"
+          disabled
+        >
+          TELEPORT ON TRAILER
+        </button>
+        <button id="flip-vehicle" class="secondary-button" type="button" disabled>
+          FLIP VEHICLE (DEBUG)
+        </button>
+        <button id="test-underbody" class="secondary-button" type="button" disabled>
+          TEST UNDERBODY (DEBUG)
+        </button>
+        <button
+          id="test-player-collision"
+          class="secondary-button"
+          type="button"
+          disabled
+        >
+          TEST PLAYER COLLISION (DEBUG)
+        </button>
+      </div>
+
+      <p id="network-message" class="debug-panel__message" aria-live="polite">
+        Connecting to server…
+      </p>
+    </aside>
+
+    <div class="scene-label" aria-hidden="true">
+      <strong>TRAILER ARENA</strong>
+      <span>PHASE 5 · PREDICTED CLIENT / AUTHORITATIVE SERVER</span>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

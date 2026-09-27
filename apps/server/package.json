@@ -1,0 +1,25 @@
+{
+  "name": "@trailer-arena/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "rimraf dist && tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "0.20.0",
+    "@trailer-arena/shared": "workspace:*",
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.2",
+    "@types/ws": "8.18.1",
+    "tsx": "4.23.13",
+    "typescript": "6.0.3",
+    "vitest": "5.0.1"
+  }
+}

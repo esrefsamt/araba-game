@@ -1,0 +1,9 @@
+import { SIMULATION_TICK_RATE } from './SimulationConstants.js';
+
+export const COUNTDOWN_SECONDS = 3;
+export const ROUND_DURATION_SECONDS = 90;
+export const TRAILER_CONTACT_GRACE_TICKS = Math.round(SIMULATION_TICK_RATE * 0.15);
+export const POSITION_POINTS = [10, 7, 5, 4, 3, 2, 1, 0] as const;
+
+export const COUNTDOWN_TICKS = COUNTDOWN_SECONDS * SIMULATION_TICK_RATE;
+export const ROUND_DURATION_TICKS = ROUND_DURATION_SECONDS * SIMULATION_TICK_RATE;
