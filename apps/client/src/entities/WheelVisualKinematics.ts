@@ -18,9 +18,10 @@ export function visualSteeringAngle(input: number, longitudinalSpeed: number): n
     1,
     Math.abs(finite(longitudinalSpeed)) / VEHICLE_TUNING.maxForwardSpeed,
   );
-  // Three.js +Y turns +Z forward toward +X (right). No reverse sign flip.
+  // With +Z forward, +X is driver-left. Match Rapier's negative yaw for
+  // a right command; wheel steering keeps the same sign in reverse.
   return (
-    clamp(input, -1, 1) *
+    (clamp(input, -1, 1) * -1 || 0) *
     VEHICLE_TUNING.steeringStrength *
     (1 - ratio * VEHICLE_TUNING.highSpeedSteeringReduction)
   );

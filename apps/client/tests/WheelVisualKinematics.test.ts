@@ -67,7 +67,7 @@ describe('longitudinal wheel kinematics', () => {
     reverse.update(-5, -1, 4, 1 / 60);
     expect(reverse.spin).toBeCloseTo(-forward.spin);
     expect(reverse.steering).toBeCloseTo(forward.steering);
-    expect(reverse.steering).toBeLessThan(0);
+    expect(reverse.steering).toBeGreaterThan(0);
   });
 
   it('smooths a snapshot speed discontinuity and settles promptly on the new sign', () => {
@@ -134,7 +134,8 @@ describe('actual player wheel hierarchy', () => {
         for (const pivot of wheels(vehicle)) {
           const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(pivot.quaternion);
           if (pivot.name.includes('front')) {
-            expect(Math.sign(forward.x)).toBe(command);
+            const driverRight = new THREE.Vector3(-1, 0, 0);
+            expect(Math.sign(forward.dot(driverRight))).toBe(command);
             expect(pivot.rotation.y).toBeCloseTo(visualSteeringAngle(command, speed), 3);
           } else expect(pivot.rotation.y).toBe(0);
         }

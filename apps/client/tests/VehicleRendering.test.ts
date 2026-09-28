@@ -24,9 +24,9 @@ describe('local and remote rendering authority', () => {
         world.updateVisualState(1 / 60, { ...NEUTRAL_INPUT, steering: -1 });
       const local = world.getLocalVehicleObject()!;
       const remote = local.parent!.getObjectByName('vehicle-remote')!;
-      expect(local.getObjectByName('wheel-steer-front-right')!.rotation.y).toBeLessThan(
-        -0.3,
-      );
+      expect(
+        local.getObjectByName('wheel-steer-front-right')!.rotation.y,
+      ).toBeGreaterThan(0.3);
       expect(remote.getObjectByName('wheel-steer-front-right')!.rotation.y).toBe(0);
       expect(world.getPredictionMetrics().renderWritesThisFrame).toBe(1);
       expect(world.getPredictionMetrics().renderWriterConflicts).toBe(0);
