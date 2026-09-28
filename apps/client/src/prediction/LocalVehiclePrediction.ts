@@ -445,10 +445,8 @@ export function simulatePredictionTick(
     VEHICLE_TUNING.steeringStrength *
     (1 - speedRatio * VEHICLE_TUNING.highSpeedSteeringReduction);
   const stationaryScale = Math.min(1, Math.abs(forwardSpeed) / 0.65);
-  // Rapier's steering axis is opposite to +Y yaw for this +Z-forward chassis.
-  // Match the authoritative turn before the first server snapshot arrives.
   const steeringYawDelta =
-    -input.steering *
+    input.steering *
     steeringStrength *
     stationaryScale *
     (forwardSpeed / VEHICLE_DIMENSIONS.wheelBase) *

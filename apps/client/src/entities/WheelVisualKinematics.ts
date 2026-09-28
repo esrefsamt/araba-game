@@ -18,11 +18,9 @@ export function visualSteeringAngle(input: number, longitudinalSpeed: number): n
     1,
     Math.abs(finite(longitudinalSpeed)) / VEHICLE_TUNING.maxForwardSpeed,
   );
-  // This +Z-forward model points toward driver-left under positive Y rotation.
-  // The front wheel pivots need negative Y for a right steering command.
-  const steering = clamp(input, -1, 1);
+  // Three.js +Y turns +Z forward toward +X (right). No reverse sign flip.
   return (
-    (steering === 0 ? 0 : -steering) *
+    clamp(input, -1, 1) *
     VEHICLE_TUNING.steeringStrength *
     (1 - ratio * VEHICLE_TUNING.highSpeedSteeringReduction)
   );
