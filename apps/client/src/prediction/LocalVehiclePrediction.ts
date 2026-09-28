@@ -445,10 +445,8 @@ export function simulatePredictionTick(
     VEHICLE_TUNING.steeringStrength *
     (1 - speedRatio * VEHICLE_TUNING.highSpeedSteeringReduction);
   const stationaryScale = Math.min(1, Math.abs(forwardSpeed) / 0.65);
-  // Match the server's Rapier steering convention: with +Z forward, a
-  // right command needs negative yaw (positive yaw turns toward driver-left).
   const steeringYawDelta =
-    -input.steering *
+    input.steering *
     steeringStrength *
     stationaryScale *
     (forwardSpeed / VEHICLE_DIMENSIONS.wheelBase) *
